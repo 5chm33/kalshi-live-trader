@@ -1,0 +1,23 @@
+# Credentials — NEVER commit
+config.json
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
