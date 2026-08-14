@@ -1,0 +1,17 @@
+[Unit]
+Description=Kalshi V11 paper-only MLB WebSocket order-book collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/kalshi_research_v11
+ExecStart=/usr/bin/python3 /home/ubuntu/kalshi_research_v11/research/ws_daemon.py --config /home/ubuntu/kalshi_research_v11/config.json --interval-seconds 60
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

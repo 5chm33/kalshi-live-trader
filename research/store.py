@@ -121,7 +121,10 @@ class ResearchStore:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path)
+        # WAL permits readers alongside a writer; a busy timeout prevents a
+        # short overlapping REST/stream write from becoming lost telemetry.
+        conn = sqlite3.connect(self.path, timeout=30)
+        conn.execute("PRAGMA busy_timeout=30000")
         conn.row_factory = sqlite3.Row
         try:
             yield conn
