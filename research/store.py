@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterator, Mapping
@@ -223,6 +223,23 @@ CREATE TABLE IF NOT EXISTS evaluation_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_decision_records_manifest ON decision_records(manifest_id, decision_timestamp);
 CREATE INDEX IF NOT EXISTS idx_evaluation_snapshots_manifest ON evaluation_snapshots(manifest_id, created_at);
+
+CREATE TABLE IF NOT EXISTS negative_results (
+    result_sha256 TEXT PRIMARY KEY,
+    manifest_id TEXT,
+    strategy_family TEXT NOT NULL,
+    strategy_version TEXT NOT NULL,
+    retired_at TEXT NOT NULL,
+    code_commit TEXT NOT NULL,
+    previous_result_sha256 TEXT,
+    payload_json TEXT NOT NULL,
+    signature TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(manifest_id) REFERENCES strategy_manifests(manifest_id),
+    FOREIGN KEY(previous_result_sha256) REFERENCES negative_results(result_sha256)
+);
+
+CREATE INDEX IF NOT EXISTS idx_negative_results_strategy ON negative_results(strategy_family, strategy_version, retired_at);
 """
 
 
@@ -581,7 +598,7 @@ class ResearchStore:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (record.record_sha256, record.manifest_id, record.stage, record.decision_timestamp,
                  record.dataset_sha256, record.previous_record_sha256, payload_json, signature,
-                 datetime.utcnow().isoformat() + "Z"),
+                 datetime.now(timezone.utc).isoformat()),
             )
 
     def record_evaluation_snapshot(
@@ -603,11 +620,42 @@ class ResearchStore:
                 """INSERT INTO evaluation_snapshots(snapshot_sha256, manifest_id, decision_record_sha256, dataset_sha256,
                    code_commit, result_json, signature, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (snapshot_sha256, manifest_id, decision_record_sha256, dataset_sha256, code_commit,
-                 result_json, signature, datetime.utcnow().isoformat() + "Z"),
+                 result_json, signature, datetime.now(timezone.utc).isoformat()),
+            )
+
+    def record_negative_result(self, result: Any, signature: str | None = None) -> None:
+        """Append a retired-hypothesis record; any rewrite is an integrity error."""
+        result.validate()
+        payload_json = self._json(result.payload)
+        with self.connect() as conn:
+            if result.previous_result_sha256:
+                prior = conn.execute("SELECT 1 FROM negative_results WHERE result_sha256=?", (result.previous_result_sha256,)).fetchone()
+                if prior is None:
+                    raise ValueError("negative-result predecessor is missing")
+            prior_study = conn.execute(
+                """SELECT result_sha256 FROM negative_results
+                   WHERE strategy_family=? AND strategy_version=?
+                     AND json_extract(payload_json, '$.specification_sha256')=?""",
+                (result.strategy_family, result.strategy_version, result.specification_sha256),
+            ).fetchone()
+            if prior_study is not None and prior_study["result_sha256"] != result.result_sha256:
+                raise ValueError("retired hypothesis already has an immutable negative-result record")
+            existing = conn.execute("SELECT payload_json, signature FROM negative_results WHERE result_sha256=?", (result.result_sha256,)).fetchone()
+            if existing is not None:
+                if existing["payload_json"] != payload_json or existing["signature"] != signature:
+                    raise ValueError("negative-result identity collision with different payload/signature")
+                return
+            conn.execute(
+                """INSERT INTO negative_results(result_sha256, manifest_id, strategy_family, strategy_version, retired_at,
+                   code_commit, previous_result_sha256, payload_json, signature, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (result.result_sha256, result.manifest_id, result.strategy_family, result.strategy_version,
+                 result.retired_at, result.code_commit, result.previous_result_sha256, payload_json, signature,
+                 datetime.now(timezone.utc).isoformat()),
             )
 
     def summary(self) -> dict[str, int]:
         with self.connect() as conn:
             tables = ("observations", "signals", "paper_orders", "paper_fills", "paper_marks", "settlements",
-                      "strategy_manifests", "decision_records", "evaluation_snapshots")
+                      "strategy_manifests", "decision_records", "evaluation_snapshots", "negative_results")
             return {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
