@@ -1,0 +1,6 @@
+V11 weather settlement-mapped v1.0.0 pre-prospective dataset descriptor
+Decision timestamp: 2026-08-14T07:41:49+00:00
+Eligible data before decision: none.
+Prospective collection starts only after the decision record is signed.
+Allowed prospective universe: KXHIGHNY, KXLOWNY, KXHIGHTDC, KXLOWTDC.
+Required evidence at later evaluation: station-mapped ensemble snapshot, executable book observation timestamped before decision, fee/tick metadata, and final official settlement.

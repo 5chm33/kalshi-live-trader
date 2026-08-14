@@ -23,12 +23,17 @@ class AuditRecordTests(unittest.TestCase):
             primary_metric="one-sided 95% lower confidence bound of net dollars per contract",
             confidence_interval_method="cluster bootstrap by settlement date",
             lower_confidence_bound_threshold="0.00", calibration_error_limit="0.02",
-            max_variants=1, execution_lifecycle="entry_to_settlement", code_commit="test",
+            max_variants=1, execution_lifecycle="entry_to_settlement", code_commit="deadbee",
         )
 
     def test_manifest_rejects_training_after_first_prospective(self) -> None:
         manifest = self.manifest()
         bad = StrategyManifest(**{**manifest.payload, "first_prospective_at": "2025-01-01T00:00:00+00:00"})
+        with self.assertRaises(ValueError):
+            _ = bad.manifest_id
+
+    def test_manifest_requires_explicit_code_commit(self) -> None:
+        bad = StrategyManifest(**{**self.manifest().payload, "code_commit": "unavailable"})
         with self.assertRaises(ValueError):
             _ = bad.manifest_id
 

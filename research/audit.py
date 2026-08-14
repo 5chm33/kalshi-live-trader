@@ -59,6 +59,8 @@ class StrategyManifest:
     def validate(self) -> None:
         if not self.strategy_family or not self.strategy_version or not self.hypothesis:
             raise ValueError("strategy family, version, and hypothesis are required")
+        if self.code_commit in {"", "unavailable"} or len(self.code_commit) < 7:
+            raise ValueError("manifest requires an explicit immutable source code commit")
         if self.max_variants < 1:
             raise ValueError("max_variants must be at least one")
         train_end = datetime.fromisoformat(self.training_end.replace("Z", "+00:00"))
