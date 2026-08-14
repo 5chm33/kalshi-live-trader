@@ -116,6 +116,8 @@ CREATE TABLE IF NOT EXISTS mlb_historical_states (
     lead_runs INTEGER NOT NULL,
     away_runs INTEGER NOT NULL,
     home_runs INTEGER NOT NULL,
+    away_team TEXT,
+    home_team TEXT,
     leader_won INTEGER NOT NULL CHECK(leader_won IN (0, 1)),
     source TEXT NOT NULL,
     source_at TEXT,
@@ -127,6 +129,37 @@ CREATE TABLE IF NOT EXISTS mlb_historical_states (
 
 CREATE INDEX IF NOT EXISTS idx_mlb_historical_bucket
 ON mlb_historical_states(inning, inning_half, leader_is_home, lead_runs);
+
+CREATE TABLE IF NOT EXISTS kalshi_historical_markets (
+    ticker TEXT PRIMARY KEY,
+    event_ticker TEXT NOT NULL,
+    series_ticker TEXT,
+    yes_sub_title TEXT,
+    no_sub_title TEXT,
+    open_time TEXT,
+    close_time TEXT,
+    settlement_ts TEXT,
+    result TEXT,
+    rules_primary TEXT,
+    raw_json TEXT NOT NULL,
+    retrieved_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS kalshi_historical_candles (
+    ticker TEXT NOT NULL,
+    end_period_ts INTEGER NOT NULL,
+    yes_bid_close TEXT,
+    yes_ask_close TEXT,
+    price_close TEXT,
+    volume_fp TEXT,
+    open_interest_fp TEXT,
+    raw_json TEXT NOT NULL,
+    retrieved_at TEXT NOT NULL,
+    PRIMARY KEY(ticker, end_period_ts)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kalshi_historical_candles_ticker_time
+ON kalshi_historical_candles(ticker, end_period_ts);
 
 CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_type, entity_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_signals_strategy_time ON signals(strategy_version, created_at);
@@ -141,6 +174,12 @@ class ResearchStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            # Forward-compatible local migration for ledgers created before
+            # exact MLB team names were needed for Kalshi ticker matching.
+            existing = {row[1] for row in conn.execute("PRAGMA table_info(mlb_historical_states)")}
+            for column in ("away_team", "home_team"):
+                if column not in existing:
+                    conn.execute(f"ALTER TABLE mlb_historical_states ADD COLUMN {column} TEXT")
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -279,22 +318,62 @@ class ResearchStore:
                 ),
             )
 
+    def record_historical_market(self, market: Mapping[str, Any], retrieved_at: datetime) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO kalshi_historical_markets(
+                    ticker, event_ticker, series_ticker, yes_sub_title, no_sub_title,
+                    open_time, close_time, settlement_ts, result, rules_primary, raw_json, retrieved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(market["ticker"]), str(market.get("event_ticker", "")), market.get("series_ticker"),
+                    market.get("yes_sub_title"), market.get("no_sub_title"), market.get("open_time"),
+                    market.get("close_time"), market.get("settlement_ts"), market.get("result"),
+                    market.get("rules_primary"), json.dumps(dict(market), sort_keys=True, default=str),
+                    retrieved_at.isoformat(),
+                ),
+            )
+
+    def record_historical_candle(self, ticker: str, candle: Mapping[str, Any], retrieved_at: datetime) -> None:
+        def nested_close(key: str) -> Any:
+            value = candle.get(key)
+            if not isinstance(value, Mapping):
+                return None
+            return value.get("close_dollars", value.get("close"))
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO kalshi_historical_candles(
+                    ticker, end_period_ts, yes_bid_close, yes_ask_close, price_close,
+                    volume_fp, open_interest_fp, raw_json, retrieved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    ticker, int(candle["end_period_ts"]), nested_close("yes_bid"), nested_close("yes_ask"),
+                    nested_close("price"), candle.get("volume_fp", candle.get("volume")),
+                    candle.get("open_interest_fp", candle.get("open_interest")),
+                    json.dumps(dict(candle), sort_keys=True, default=str), retrieved_at.isoformat(),
+                ),
+            )
+
     def record_mlb_historical_state(self, row: Mapping[str, Any], stamp: SourceStamp) -> None:
         """Persist one immutable completed-game state used for calibration."""
         with self.connect() as conn:
             conn.execute(
-                """INSERT OR IGNORE INTO mlb_historical_states(
+                """INSERT INTO mlb_historical_states(
                     game_pk, at_bat_index, game_date, inning, inning_half, outs,
-                    leader_is_home, lead_runs, away_runs, home_runs, leader_won,
+                    leader_is_home, lead_runs, away_runs, home_runs, away_team, home_team, leader_won,
                     source, source_at, received_at, payload_sha256, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(game_pk, at_bat_index) DO UPDATE SET
+                  away_team=excluded.away_team, home_team=excluded.home_team,
+                  source_at=excluded.source_at, received_at=excluded.received_at,
+                  payload_sha256=excluded.payload_sha256, raw_json=excluded.raw_json""",
                 (
                     str(row["game_pk"]), int(row["at_bat_index"]), str(row["game_date"]),
                     int(row["inning"]), str(row["inning_half"]),
                     int(row["outs"]) if row.get("outs") is not None else None,
                     int(bool(row["leader_is_home"])), int(row["lead_runs"]),
-                    int(row["away_runs"]), int(row["home_runs"]), int(bool(row["leader_won"])),
-                    stamp.source, stamp.source_at.isoformat() if stamp.source_at else None,
+                    int(row["away_runs"]), int(row["home_runs"]), row.get("away_team"), row.get("home_team"),
+                    int(bool(row["leader_won"])), stamp.source, stamp.source_at.isoformat() if stamp.source_at else None,
                     stamp.received_at.isoformat(), stamp.payload_sha256,
                     json.dumps(dict(row), sort_keys=True, default=str),
                 ),

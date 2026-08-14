@@ -81,3 +81,17 @@ Additional references:
 [16] https://docs.kalshi.com/getting_started/quick_start_websockets
 [17] https://docs.kalshi.com/websockets/orderbook-updates
 [18] https://docs.kalshi.com/getting_started/orderbook_responses
+
+## Historical Market Candlestick Validation
+
+The official Kalshi historical market endpoint accepts `series_ticker` and cursor pagination. The archived-candlestick endpoint accepts a market ticker, bounded Unix start/end timestamps, and only 1-, 60-, or 1440-minute intervals. Minute-candlestick requests must be bounded to a market lifecycle window to avoid output-limit errors.
+
+A read-only V11 diagnostic on 2026-08-14 retrieved five archived `KXMLBGAME` markets and 1,501 one-minute candlesticks for `KXMLBGAME-26JUN131605SEAWSH-WSH` over a two-day pre-close window. The returned fields included `yes_bid`, `yes_ask`, trade-price OHLC, volume, open interest, and minute end timestamp.
+
+Candlesticks are not executable order-book depth and cannot prove a fill. They can support a conservative **quote-availability and post-event repricing study** only when joined to official MLB state timestamps, with the timestamp alignment and delay explicitly recorded.
+
+References:
+
+[19] https://docs.kalshi.com/api-reference/historical/get-historical-markets
+[20] https://docs.kalshi.com/api-reference/historical/get-historical-market-candlesticks
+[21] https://docs.kalshi.com/api-reference/market/batch-get-market-candlesticks

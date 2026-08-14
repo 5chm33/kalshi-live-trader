@@ -111,3 +111,21 @@ class ReadOnlyKalshiClient:
 
     def orderbook(self, ticker: str) -> dict[str, Any]:
         return self.get(f"/markets/{ticker}/orderbook")
+
+    def historical_markets(
+        self, series_ticker: str, limit: int = 1000, cursor: str | None = None
+    ) -> dict[str, Any]:
+        return self.get(
+            "/historical/markets",
+            {"series_ticker": series_ticker, "limit": limit, "cursor": cursor},
+        )
+
+    def historical_candlesticks(
+        self, ticker: str, start_ts: int, end_ts: int, period_interval: int = 1
+    ) -> dict[str, Any]:
+        if period_interval not in {1, 60, 1440}:
+            raise ValueError("period_interval must be one of 1, 60, 1440")
+        return self.get(
+            f"/historical/markets/{ticker}/candlesticks",
+            {"start_ts": start_ts, "end_ts": end_ts, "period_interval": period_interval},
+        )

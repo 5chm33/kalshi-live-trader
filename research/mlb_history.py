@@ -58,6 +58,11 @@ class MLBHistoricalCollector:
             # MLB regular-season games do not resolve tied; avoid a malformed
             # or suspended feed from contaminating binary win outcomes.
             return 0
+        teams = payload.get("gameData", {}).get("teams", {})
+        away_team = str(teams.get("away", {}).get("name", ""))
+        home_team = str(teams.get("home", {}).get("name", ""))
+        if not away_team or not home_team:
+            return 0
         plays = payload.get("liveData", {}).get("plays", {}).get("allPlays", [])
         recorded = 0
         for play in plays:
@@ -83,6 +88,7 @@ class MLBHistoricalCollector:
                 "inning": inning, "inning_half": half, "outs": count.get("outs"),
                 "leader_is_home": leader_is_home, "lead_runs": lead,
                 "away_runs": away, "home_runs": home,
+                "away_team": away_team, "home_team": home_team,
                 "leader_won": (final_home > final_away) if leader_is_home else (final_away > final_home),
             }
             stamp = SourceStamp(
