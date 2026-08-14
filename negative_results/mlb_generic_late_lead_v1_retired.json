@@ -1,0 +1,35 @@
+{
+  "strategy_family": "mlb_generic_late_lead",
+  "strategy_version": "legacy_v1_retired",
+  "hypothesis": "Buying the current MLB leader whenever it leads by at least three runs from the sixth inning onward has positive fee-adjusted entry-to-settlement expectancy at the first observed Kalshi ask.",
+  "specification_sha256": "4280eab57a99584276840f01439c2d152fb33c7ceec24f525c70ab8c802bce7b",
+  "manifest_id": null,
+  "eligible_sample": {
+    "aligned_quote_rows": 1731,
+    "first_state_out_of_sample_candidates": 124,
+    "leader_win_rate": "0.9532",
+    "mean_quote_delay_seconds": "29.60",
+    "lifecycle": "historical_quote_only_entry_to_settlement_proxy"
+  },
+  "exclusions": {
+    "outside_two_minute_quote_window": "excluded",
+    "nonexact_team_date_contract_mapping": "excluded",
+    "nonleader_or_lead_below_three_runs": "excluded",
+    "pre_sixth_inning_states": "excluded",
+    "fillable_depth_queue_ack_latency": "unobserved in historical candles; no executable claim"
+  },
+  "uncertainty_interval": {
+    "registered_metric": "not eligible because calibrated out-of-sample gate emitted 0 of 124 candidates",
+    "screen_type": "descriptive archived-candle quote proxy, not a fill simulation",
+    "mean_proxy_net_per_contract": "-0.0082"
+  },
+  "primary_outcome": {
+    "total_proxy_pnl": "-14.1816",
+    "mean_fee_adjusted_proxy_net_per_contract": "-0.0082",
+    "decision": "retired_as_broad_entry_rule"
+  },
+  "retirement_reason": "The expanded historical archived-quote screen remained negative after fees and rounding reserve despite a 95.32% leader win rate; the calibrated out-of-sample gate produced zero candidates. High probability did not clear observed entry costs.",
+  "retired_at": "2026-08-14T18:59:00+00:00",
+  "code_commit": "500deb12a3dde7a095cc5e98739412db56c982e1",
+  "previous_result_sha256": null
+}

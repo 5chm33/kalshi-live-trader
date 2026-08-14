@@ -20,6 +20,8 @@ The initial historical study joined completed MLB late-lead states to the first 
 
 The first, smaller sample (501 aligned rows) was more negative (−$0.0472 per contract); the larger 1,731-row result remains negative. The quote-only calculation has intentionally **not** been represented as a backtest or a fill simulation. Historical candles do not contain displayed depth, queue position, partial-fill behavior, acknowledgement latency, adverse selection, or the account’s actual fill-fee record. The result is nevertheless adequate to eliminate the broad “3+ runs in the 6th+” rule as a credible source of edge at the observed asks.
 
+The permanently retired specification and signed-archive payload are published in [`negative_results/mlb_generic_late_lead_v1_spec.txt`](negative_results/mlb_generic_late_lead_v1_spec.txt) and [`negative_results/mlb_generic_late_lead_v1_retired.json`](negative_results/mlb_generic_late_lead_v1_retired.json). Any materially different MLB hypothesis requires a new pre-registered specification and cannot reuse this retired broad rule under a new label.
+
 ## Current Research Assets
 
 | Component | State | What it can establish |

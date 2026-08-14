@@ -1,0 +1,7 @@
+Retired hypothesis: generic MLB late lead v1
+
+Entry condition: buy one YES contract on the currently leading MLB team when the official completed-game state shows a lead of at least three runs in inning six or later.
+
+Historical screen rule: align each eligible completed-game state to the first archived Kalshi minute candle for the exact team-specific game-winner ticker within two minutes after the state timestamp. Model a purchase at the archived YES ask, documented taker fee, and one-cent rounding reserve. Retain only the first eligible state per game-contract for the descriptive outcome report.
+
+This specification is retired as a broad rule. It is a historical quote-only screen, not an executable fill simulation.
