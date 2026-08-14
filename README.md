@@ -82,6 +82,12 @@ python3 research/diagnose_weather.py --city dallas --kind high
 
 `python3 main.py` intentionally exits with a live-execution-disabled message.
 
+For an independent local check of the unit suite, lockout behavior, and basic credential scan:
+
+```bash
+scripts/validate_v11.sh
+```
+
 ## Evidence Standard Before Any Future Live-Readiness Review
 
 A future live-readiness review would require, at minimum, a full documented settlement-source map, fee- and depth-aware paper data, durable reconciliation after restarts, a pre-registered calibration method, adequate out-of-sample sample size, and positive net results after costs. The current system does **not** meet that bar.
