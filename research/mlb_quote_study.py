@@ -62,6 +62,7 @@ def build_quote_study(database: str | Path, max_quote_delay_seconds: int = 120) 
         if len(team_pair) == 2 and suffix:
             market_index.setdefault((date_token, team_pair, suffix), []).append(ticker)
     now = datetime.now(timezone.utc)
+    pending_rows: list[dict[str, Any]] = []
     for state in states:
         state_time = _parse_time(state["source_at"])
         date_token = _event_date_token(state["source_at"])
@@ -85,17 +86,15 @@ def build_quote_study(database: str | Path, max_quote_delay_seconds: int = 120) 
             continue
         candle = rows[0]
         delay = candle["end_period_ts"] - state_time.timestamp()
-        store.record_mlb_quote_study(
-            {
-                "game_pk": state["game_pk"], "at_bat_index": state["at_bat_index"], "ticker": ticker,
-                "state_source_at": state["source_at"], "candle_end_period_ts": candle["end_period_ts"],
-                "quote_delay_seconds": delay, "yes_bid_close": candle["yes_bid_close"],
-                "yes_ask_close": candle["yes_ask_close"], "leader_won": state["leader_won"],
-                "mapping_method": "exact_date_team_pair_ticker_suffix_then_first_post_state_minute_candle",
-            },
-            now,
-        )
+        pending_rows.append({
+            "game_pk": state["game_pk"], "at_bat_index": state["at_bat_index"], "ticker": ticker,
+            "state_source_at": state["source_at"], "candle_end_period_ts": candle["end_period_ts"],
+            "quote_delay_seconds": delay, "yes_bid_close": candle["yes_bid_close"],
+            "yes_ask_close": candle["yes_ask_close"], "leader_won": state["leader_won"],
+            "mapping_method": "exact_date_team_pair_ticker_suffix_then_first_post_state_minute_candle",
+        })
         matched += 1
+    store.record_mlb_quote_study_rows(pending_rows, now)
     return {
         "states_considered": len(states), "quote_study_rows_written": matched,
         "states_without_exact_archived_market": missing_market,

@@ -415,6 +415,28 @@ class ResearchStore:
                 ),
             )
 
+    def record_mlb_quote_study_rows(self, rows: list[Mapping[str, Any]], created_at: datetime) -> None:
+        values = [
+            (
+                str(row["game_pk"]), int(row["at_bat_index"]), str(row["ticker"]),
+                str(row["state_source_at"]), int(row["candle_end_period_ts"]),
+                float(row["quote_delay_seconds"]), row.get("yes_bid_close"), row.get("yes_ask_close"),
+                int(bool(row["leader_won"])), str(row["mapping_method"]), created_at.isoformat(),
+            )
+            for row in rows
+        ]
+        if not values:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                """INSERT OR REPLACE INTO mlb_quote_study(
+                    game_pk, at_bat_index, ticker, state_source_at, candle_end_period_ts,
+                    quote_delay_seconds, yes_bid_close, yes_ask_close, leader_won,
+                    mapping_method, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                values,
+            )
+
     def record_mlb_historical_state(self, row: Mapping[str, Any], stamp: SourceStamp) -> None:
         """Persist one completed-game state used for calibration."""
         self.record_mlb_historical_states([(row, stamp)])
