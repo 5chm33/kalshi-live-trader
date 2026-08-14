@@ -1,0 +1,11 @@
+[Unit]
+Description=Five-minute Kalshi V11 paper-research health check
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=kalshi-research-v11-health.service
+
+[Install]
+WantedBy=timers.target

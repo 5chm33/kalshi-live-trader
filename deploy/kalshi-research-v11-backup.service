@@ -1,0 +1,16 @@
+[Unit]
+Description=Kalshi V11 paper-research local backup and restore verification
+After=network.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/kalshi_research_v11
+ExecStart=/home/ubuntu/kalshi_research_v11/scripts/run_backup_verify.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/ubuntu/kalshi_research_v11/data /home/ubuntu/kalshi_research_v11/backups /home/ubuntu/kalshi_research_v11/exports
+
+[Install]
+WantedBy=multi-user.target

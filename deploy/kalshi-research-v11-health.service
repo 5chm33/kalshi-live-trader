@@ -1,0 +1,16 @@
+[Unit]
+Description=Kalshi V11 paper-research independent health check
+After=network.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/kalshi_research_v11
+ExecStart=/usr/bin/python3 /home/ubuntu/kalshi_research_v11/research/healthcheck.py --database data/research_v11.sqlite3 --max-observation-age-seconds 7200
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadOnlyPaths=/home/ubuntu/kalshi_research_v11/data
+
+[Install]
+WantedBy=multi-user.target

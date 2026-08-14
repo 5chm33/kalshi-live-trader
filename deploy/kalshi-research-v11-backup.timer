@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Kalshi V11 paper-research backup and restore verification
+
+[Timer]
+OnCalendar=*-*-* 03:20:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=kalshi-research-v11-backup.service
+
+[Install]
+WantedBy=timers.target
