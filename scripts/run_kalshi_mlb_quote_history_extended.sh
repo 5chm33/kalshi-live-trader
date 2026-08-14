@@ -8,5 +8,5 @@ cd "$(dirname "$0")/.."
 exec python3 research/backfill_kalshi_mlb_history.py \
   --config config.json \
   --database data/research_v11.sqlite3 \
-  --max-pages 1 \
+  --max-pages 4 \
   --max-markets 1000
