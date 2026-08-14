@@ -23,6 +23,8 @@ def main() -> None:
         "SELECT substr(game_date, 1, 7) AS month, COUNT(*) FROM mlb_historical_states GROUP BY month ORDER BY month"
     ).fetchall()
     result["mlb_historical_states_by_month"] = {row[0]: int(row[1]) for row in monthly}
+    quote_range = conn.execute("SELECT MIN(close_time), MAX(close_time) FROM kalshi_historical_markets").fetchone()
+    result["kalshi_historical_market_close_range"] = {"start": quote_range[0], "end": quote_range[1]}
     print(json.dumps(result, sort_keys=True))
 
 

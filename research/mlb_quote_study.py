@@ -38,8 +38,11 @@ def build_quote_study(database: str | Path, max_quote_delay_seconds: int = 120) 
         """SELECT * FROM mlb_historical_states
            WHERE source_at IS NOT NULL AND away_team IS NOT NULL AND home_team IS NOT NULL"""
     ).fetchall()
+    # Historical-market responses may omit `series_ticker`; this collector
+    # itself is exclusively scoped to KXMLBGAME, so use only the exact ticker
+    # identity fields required by the matching contract.
     markets = conn.execute(
-        "SELECT ticker, event_ticker FROM kalshi_historical_markets WHERE series_ticker = 'KXMLBGAME'"
+        "SELECT ticker, event_ticker FROM kalshi_historical_markets WHERE event_ticker LIKE 'KXMLBGAME-%'"
     ).fetchall()
     matched = missing_market = missing_quote = 0
     market_rows = [dict(row) for row in markets]
