@@ -91,7 +91,10 @@ Backfill a bounded set of completed official MLB games and produce an empirical,
 ```bash
 python3 research/backfill_mlb_history.py --database data/research_v11.sqlite3 --start 2025-04-01 --end 2025-04-07
 python3 research/fit_mlb_calibration.py --database data/research_v11.sqlite3 --training-end 2025-04-07 --minimum-games 100
+python3 research/evaluate_mlb_oos.py --database data/research_v11.sqlite3 --training-end 2025-07-31 --test-start 2025-08-01 --test-end 2025-09-28
 ```
+
+The out-of-sample report evaluates only probability calibration. It deliberately does **not** claim trading profitability until time-aligned Kalshi executable quotes and modeled fills are available.
 
 `python3 main.py` intentionally exits with a live-execution-disabled message.
 
