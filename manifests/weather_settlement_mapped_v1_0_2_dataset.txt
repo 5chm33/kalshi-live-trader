@@ -1,0 +1,5 @@
+Weather settlement-mapped v1.0.2 prospective dataset boundary
+
+Eligible observations must be received at or after 2026-08-14T18:51:33+00:00 and before or at 2026-09-30T23:59:59+00:00.
+Eligible universe is limited to KXHIGHNY, KXLOWNY, KXHIGHTDC, and KXLOWTDC with the station mapping frozen in weather_settlement_mapped_v1_0_2.json.
+No observation received before the boundary may enter prospective evaluation. No contract without verified station mapping and final settlement may enter the primary metric.

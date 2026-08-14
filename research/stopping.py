@@ -17,6 +17,10 @@ class StoppingRule:
     def from_manifest(cls, payload: Mapping[str, Any]) -> "StoppingRule":
         window = payload.get("collection_window")
         if not isinstance(window, Mapping):
+            universe = payload.get("market_universe")
+            protocol = universe.get("research_protocol") if isinstance(universe, Mapping) else None
+            window = protocol.get("collection_window") if isinstance(protocol, Mapping) else None
+        if not isinstance(window, Mapping):
             raise ValueError("manifest has no fixed collection_window")
         try:
             start = datetime.fromisoformat(str(window["prospective_start_at"]))

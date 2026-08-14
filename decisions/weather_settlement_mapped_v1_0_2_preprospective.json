@@ -1,0 +1,23 @@
+{
+  "manifest_id": "replaced by record_decision.py",
+  "stage": "pre_prospective",
+  "dataset_sha256": "956e2efee6138e9defe9852cb6c75c2f27f5f93e43d7950307fa646e5edbc8bc",
+  "available_data_ends_at": "2026-08-14T18:51:32Z",
+  "decision_timestamp": "2026-08-14T18:51:33Z",
+  "exclusions": {
+    "received_before_prospective_window": "exclude",
+    "received_after_registered_end_time": "exclude",
+    "unmapped_weather_series": "exclude",
+    "range_contracts": "exclude until exact tie and full-precision settlement semantics are independently verified",
+    "missing_book_timestamp": "exclude",
+    "missing_fee_or_tick_metadata": "exclude",
+    "missing_or_nonfinal_official_settlement": "exclude",
+    "any_decision_using_data_after_its_timestamp": "exclude"
+  },
+  "primary_endpoint": "one-sided 95% cluster-bootstrap lower confidence bound of fee- and displayed-depth-adjusted entry-to-settlement net dollars per contract, clustered by settlement date",
+  "promotion_rule": "Passing all registered research gates creates a review candidate only. It cannot enable production or orders. Independent reproduction and a separately complete production-readiness review are required before any future human activation decision.",
+  "retirement_rule": "Retire v1.0.2 without promotion if the registered end time arrives or the 250-candidate budget is reached before every registered gate passes. Any modified rule is a new version.",
+  "more_data_rule": "Collect only within the fixed 2026-08-14T18:51:33Z through 2026-09-30T23:59:59Z window and until no more than 250 eligible candidates. Do not extend the window, add variants, or change sources under v1.0.2.",
+  "falsifier": "A non-positive one-sided lower confidence bound, calibration error above 0.02, failed placebo, failed liquidity or latency sensitivity, or fewer than 100 settled eligible candidates at the registered endpoint retires v1.0.2.",
+  "previous_record_sha256": null
+}
