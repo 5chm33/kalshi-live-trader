@@ -11,14 +11,14 @@ The initial historical study joined completed MLB late-lead states to the first 
 
 | Metric | Observed value | Interpretation |
 |---|---:|---|
-| Aligned quote rows | 501 | Sufficient to reject the broad rule, not sufficient to prove narrow buckets. |
-| Leader win rate | 92.02% | High probability alone is not evidence of a profitable entry. |
-| Mean quote delay | 30.37 seconds | Timestamp alignment is only minute-candle resolution. |
-| Mean fee-adjusted quote-only P&L proxy | **−$0.0472 per contract** | The observed ask already reflected the obvious game-state advantage. |
-| Total proxy P&L | **−$23.6245** | A descriptive counterfactual, not executable P&L. |
-| Calibrated OOS candidates | 0 | The pre-registered model gate correctly withheld entries. |
+| Aligned quote rows | **1,731** | Larger archival sample; still a quote-only screen, not a fill simulation. |
+| Leader win rate | **95.32%** | High probability alone is not evidence of a profitable entry. |
+| Mean quote delay | **29.60 seconds** | Timestamp alignment is only minute-candle resolution. |
+| Mean fee-adjusted quote-only P&L proxy | **−$0.0082 per contract** | Even with the broader sample, the observed ask consumed the generic edge. |
+| Total proxy P&L | **−$14.1816** | A descriptive counterfactual, not executable P&L. |
+| Calibrated OOS candidates | 0 of 124 first-state candidates | The pre-registered model gate correctly withheld entries. |
 
-The quote-only calculation has intentionally **not** been represented as a backtest or a fill simulation. Historical candles do not contain displayed depth, queue position, partial-fill behavior, acknowledgement latency, adverse selection, or the account’s actual fill-fee record. The result is nevertheless adequate to eliminate the broad “3+ runs in the 6th+” rule as a credible source of edge at the observed asks.
+The first, smaller sample (501 aligned rows) was more negative (−$0.0472 per contract); the larger 1,731-row result remains negative. The quote-only calculation has intentionally **not** been represented as a backtest or a fill simulation. Historical candles do not contain displayed depth, queue position, partial-fill behavior, acknowledgement latency, adverse selection, or the account’s actual fill-fee record. The result is nevertheless adequate to eliminate the broad “3+ runs in the 6th+” rule as a credible source of edge at the observed asks.
 
 ## Current Research Assets
 
