@@ -103,6 +103,10 @@ class ReadOnlyKalshiClient:
     def resting_orders(self, cursor: str | None = None, limit: int = 1000) -> dict[str, Any]:
         return self.get("/portfolio/orders", {"status": "resting", "cursor": cursor, "limit": limit})
 
+    def open_markets(self, limit: int = 1000, cursor: str | None = None) -> dict[str, Any]:
+        """Discover open markets through a signed GET request only."""
+        return self.get("/markets", {"status": "open", "limit": limit, "cursor": cursor})
+
     def markets(self, series_ticker: str, limit: int = 1000, cursor: str | None = None) -> dict[str, Any]:
         return self.get("/markets", {"status": "open", "series_ticker": series_ticker, "limit": limit, "cursor": cursor})
 
