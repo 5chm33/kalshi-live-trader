@@ -1,0 +1,18 @@
+[Unit]
+Description=Kalshi V11 Paper-Only Settlement-Mapped Weather Pilot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/kalshi_research_v11
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/ubuntu/kalshi_research_v11/research/weather_pilot_daemon.py --config /home/ubuntu/kalshi_research_v11/config.json --database /home/ubuntu/kalshi_research_v11/data/research_v11.sqlite3 --interval-seconds 1800
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
