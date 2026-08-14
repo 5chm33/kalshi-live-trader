@@ -96,6 +96,15 @@ CREATE TABLE IF NOT EXISTS paper_marks (
     reason TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS settlements (
+    ticker TEXT PRIMARY KEY,
+    result TEXT NOT NULL CHECK(result IN ('yes', 'no')),
+    settled_at TEXT,
+    source TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL,
+    raw_json TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_type, entity_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_signals_strategy_time ON signals(strategy_version, created_at);
 CREATE INDEX IF NOT EXISTS idx_paper_orders_ticker ON paper_orders(ticker, created_at);
@@ -244,7 +253,20 @@ class ResearchStore:
                 ),
             )
 
+    def record_settlement(self, ticker: str, result: str, stamp: SourceStamp,
+                          raw: Mapping[str, Any]) -> None:
+        if result not in {"yes", "no"}:
+            raise ValueError("settlement result must be 'yes' or 'no'")
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO settlements
+                   (ticker, result, settled_at, source, payload_sha256, raw_json)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (ticker, result, self._iso(stamp.source_at), stamp.source,
+                 stamp.payload_sha256, self._json(raw)),
+            )
+
     def summary(self) -> dict[str, int]:
         with self.connect() as conn:
-            tables = ("observations", "signals", "paper_orders", "paper_fills", "paper_marks")
+            tables = ("observations", "signals", "paper_orders", "paper_fills", "paper_marks", "settlements")
             return {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}

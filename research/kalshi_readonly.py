@@ -106,5 +106,8 @@ class ReadOnlyKalshiClient:
     def markets(self, series_ticker: str, limit: int = 1000, cursor: str | None = None) -> dict[str, Any]:
         return self.get("/markets", {"status": "open", "series_ticker": series_ticker, "limit": limit, "cursor": cursor})
 
+    def market(self, ticker: str) -> dict[str, Any]:
+        return self.get(f"/markets/{ticker}")
+
     def orderbook(self, ticker: str) -> dict[str, Any]:
         return self.get(f"/markets/{ticker}/orderbook")
