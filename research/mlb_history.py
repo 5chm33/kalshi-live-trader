@@ -7,6 +7,7 @@ states within a game are not independent observations.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from typing import Any, Mapping
 
@@ -47,8 +48,10 @@ class MLBHistoricalCollector:
         except ValueError:
             return None
 
-    def collect_game(self, game_pk: str, game_date: date) -> int:
-        response = self.session.get(GAME_FEED_URL.format(game_pk=game_pk), timeout=30)
+    def _game_records(self, game_pk: str, game_date: date) -> list[tuple[Mapping[str, Any], SourceStamp]]:
+        # Use a per-call public request in worker threads. Ledger writes remain
+        # serial in the caller, avoiding SQLite cross-thread mutation.
+        response = requests.get(GAME_FEED_URL.format(game_pk=game_pk), timeout=30)
         response.raise_for_status()
         payload = response.json()
         linescore = payload.get("liveData", {}).get("linescore", {}).get("teams", {})
@@ -57,12 +60,12 @@ class MLBHistoricalCollector:
         if final_home == final_away:
             # MLB regular-season games do not resolve tied; avoid a malformed
             # or suspended feed from contaminating binary win outcomes.
-            return 0
+            return []
         teams = payload.get("gameData", {}).get("teams", {})
         away_team = str(teams.get("away", {}).get("name", ""))
         home_team = str(teams.get("home", {}).get("name", ""))
         if not away_team or not home_team:
-            return 0
+            return []
         plays = payload.get("liveData", {}).get("plays", {}).get("allPlays", [])
         records: list[tuple[Mapping[str, Any], SourceStamp]] = []
         for play in plays:
@@ -98,12 +101,26 @@ class MLBHistoricalCollector:
                 payload_sha256=payload_hash(raw),
             )
             records.append((raw, stamp))
+        return records
+
+    def collect_game(self, game_pk: str, game_date: date) -> int:
+        records = self._game_records(game_pk, game_date)
         self.store.record_mlb_historical_states(records)
         return len(records)
 
-    def collect_date(self, target_date: date, max_games: int | None = None) -> dict[str, int]:
+    def collect_date(self, target_date: date, max_games: int | None = None, workers: int = 4) -> dict[str, int]:
         ids = self.game_ids(target_date)
         if max_games is not None:
             ids = ids[:max_games]
-        states = sum(self.collect_game(game_pk, target_date) for game_pk in ids)
+        if workers <= 0:
+            raise ValueError("workers must be positive")
+        states = 0
+        # Bounded public GET concurrency significantly shortens backfills while
+        # retaining serial database commits and deterministic durable records.
+        with ThreadPoolExecutor(max_workers=min(workers, len(ids) or 1)) as executor:
+            futures = {executor.submit(self._game_records, game_pk, target_date): game_pk for game_pk in ids}
+            for future in as_completed(futures):
+                records = future.result()
+                self.store.record_mlb_historical_states(records)
+                states += len(records)
         return {"date": target_date.isoformat(), "games": len(ids), "states_seen": states, "stored_total": self.store.historical_mlb_state_count()}
