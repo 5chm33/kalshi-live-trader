@@ -18,7 +18,7 @@ main.py (orchestrator)
 │   └── Tennis Value → Rankings-based value + volatility plays
 │
 ├── Slow Loop (180s) — Weather
-│   └── 209-Member Ensemble (ECMWF+AIFS+GFS+ICON+UKMO)
+│   └── Experimental multi-model ensemble (live member count must be verified)
 │
 └── Position Manager — Trailing stops, profit targets, time exits
 ```
@@ -28,8 +28,8 @@ main.py (orchestrator)
 ### 1. Polling-Based Sports Signal Detector (MLB implemented)
 Polls ESPN score updates and evaluates a heuristic late-game baseball rule. The checked-in implementation is **MLB-only**, uses a 10-second REST polling loop, and does not implement a live WebSocket subscription or demonstrate exploitable latency after fees and fills.
 
-- **Baseball Late Lead**: Team up 3+ runs in 6th+ inning → 88-98% win rate
-- **Score Change Sniping**: Immediate IOC orders after detected score changes
+- **Baseball Late Lead**: A heuristic for teams up 3+ runs in the sixth inning or later; its net profitability has not been validated.
+- **Score Change Handling**: IOC orders may be submitted after detected score changes; no latency advantage has been demonstrated.
 
 ### 2. Experimental Weather Ensemble (member count must be validated live)
 The engine requests five global weather-model families for temperature forecasting:
@@ -61,7 +61,7 @@ Quality filters: 25% min edge for range markets, 55% confidence floor, 45c max N
 ## API
 
 Uses Kalshi V2 API with:
-- **IOC orders** (Immediate-Or-Cancel) for instant fills on stale prices
+- **IOC orders** (Immediate-Or-Cancel) supported by the order client; they do not establish that a stale-price fill is available.
 - **RSA-PSS signing** for authentication
 - Rate-limited to 20 req/sec (well under 30/sec advanced tier limit)
 

@@ -59,5 +59,5 @@ This code should be treated as a reviewed starting point for a **paper-trading a
 ---
 
 **Audit author:** Manus AI
-**Repository state audited:** commit `e01e56c` plus uncommitted audit documentation and test scripts
+**Repository state audited:** source commit `e01e56c`; audit documentation and read-only test scripts were published in follow-up commit `be2d981`
 **Method:** static review and read-only public API checks only; no trades were placed as part of this audit.
