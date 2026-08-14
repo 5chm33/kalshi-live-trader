@@ -10,7 +10,7 @@ ExecStart=/home/ubuntu/kalshi_research_v11/scripts/run_backup_verify.sh
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/home/ubuntu/kalshi_research_v11/data /home/ubuntu/kalshi_research_v11/backups /home/ubuntu/kalshi_research_v11/exports
+ReadWritePaths=/home/ubuntu/kalshi_research_v11
 
 [Install]
 WantedBy=multi-user.target
