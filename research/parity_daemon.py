@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 from research.capture_binary_parity import run_cycle as run_binary
 from research.capture_directional_parity import run_cycle as run_directional
 from research.kalshi_readonly import ReadOnlyKalshiClient
+from research.capture_mec_no_basket import run_cycle as run_mec
 from research.run_mlb_paper import load_config
 from research.store import ResearchStore
 
@@ -25,6 +26,8 @@ def main() -> None:
     parser.add_argument("--interval-seconds", type=int, default=300)
     parser.add_argument("--max-markets", type=int, default=100)
     parser.add_argument("--max-events", type=int, default=50)
+    parser.add_argument("--max-mec-events", type=int, default=25)
+    parser.add_argument("--mec-screen-legs", type=int, default=12)
     args = parser.parse_args()
     if args.interval_seconds < 60:
         raise ValueError("interval-seconds must be at least 60 for the bounded research collector")
@@ -39,7 +42,8 @@ def main() -> None:
         try:
             binary = run_binary(client, store, max_markets=args.max_markets)
             directional = run_directional(client, store, max_events=args.max_events)
-            logging.info("binary=%s directional=%s", binary, directional)
+            mec = run_mec(client, store, max_events=args.max_mec_events, screen_legs=args.mec_screen_legs)
+            logging.info("binary=%s directional=%s mec_no_basket=%s", binary, directional, mec)
         except Exception as exc:
             logging.exception("paper-only parity cycle failed: %s", exc)
         time.sleep(max(0.0, args.interval_seconds - (time.monotonic() - started)))
