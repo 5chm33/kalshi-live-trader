@@ -115,6 +115,17 @@ class AuditSigner:
         raw = key or os.environ.get("V11_AUDIT_SIGNING_KEY", "").encode("utf-8")
         self._key = raw
 
+    @classmethod
+    def from_file(cls, path: Path, required: bool = False) -> "AuditSigner":
+        if not path.exists():
+            if required:
+                raise ValueError(f"missing local audit signing key: {path}")
+            return cls()
+        key = path.read_bytes().strip()
+        if required and not key:
+            raise ValueError(f"empty local audit signing key: {path}")
+        return cls(key)
+
     @property
     def enabled(self) -> bool:
         return bool(self._key)
