@@ -105,6 +105,29 @@ CREATE TABLE IF NOT EXISTS settlements (
     raw_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS mlb_historical_states (
+    game_pk TEXT NOT NULL,
+    at_bat_index INTEGER NOT NULL,
+    game_date TEXT NOT NULL,
+    inning INTEGER NOT NULL,
+    inning_half TEXT NOT NULL,
+    outs INTEGER,
+    leader_is_home INTEGER NOT NULL CHECK(leader_is_home IN (0, 1)),
+    lead_runs INTEGER NOT NULL,
+    away_runs INTEGER NOT NULL,
+    home_runs INTEGER NOT NULL,
+    leader_won INTEGER NOT NULL CHECK(leader_won IN (0, 1)),
+    source TEXT NOT NULL,
+    source_at TEXT,
+    received_at TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL,
+    raw_json TEXT NOT NULL,
+    PRIMARY KEY(game_pk, at_bat_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mlb_historical_bucket
+ON mlb_historical_states(inning, inning_half, leader_is_home, lead_runs);
+
 CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_type, entity_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_signals_strategy_time ON signals(strategy_version, created_at);
 CREATE INDEX IF NOT EXISTS idx_paper_orders_ticker ON paper_orders(ticker, created_at);
@@ -255,6 +278,31 @@ class ResearchStore:
                     reason,
                 ),
             )
+
+    def record_mlb_historical_state(self, row: Mapping[str, Any], stamp: SourceStamp) -> None:
+        """Persist one immutable completed-game state used for calibration."""
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO mlb_historical_states(
+                    game_pk, at_bat_index, game_date, inning, inning_half, outs,
+                    leader_is_home, lead_runs, away_runs, home_runs, leader_won,
+                    source, source_at, received_at, payload_sha256, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(row["game_pk"]), int(row["at_bat_index"]), str(row["game_date"]),
+                    int(row["inning"]), str(row["inning_half"]),
+                    int(row["outs"]) if row.get("outs") is not None else None,
+                    int(bool(row["leader_is_home"])), int(row["lead_runs"]),
+                    int(row["away_runs"]), int(row["home_runs"]), int(bool(row["leader_won"])),
+                    stamp.source, stamp.source_at.isoformat() if stamp.source_at else None,
+                    stamp.received_at.isoformat(), stamp.payload_sha256,
+                    json.dumps(dict(row), sort_keys=True, default=str),
+                ),
+            )
+
+    def historical_mlb_state_count(self) -> int:
+        with self.connect() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM mlb_historical_states").fetchone()[0])
 
     def unsettled_tickers(self) -> list[str]:
         """Return unique candidate/fill contracts with no recorded settlement."""

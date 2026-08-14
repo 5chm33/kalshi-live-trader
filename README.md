@@ -86,6 +86,13 @@ Capture sequence-checked, read-only order-book snapshots and deltas for currentl
 python3 research/capture_mlb_ws.py --config config.json --max-seconds 60
 ```
 
+Backfill a bounded set of completed official MLB games and produce an empirical, game-clustered calibration report. Sparse buckets deliberately remain ineligible:
+
+```bash
+python3 research/backfill_mlb_history.py --database data/research_v11.sqlite3 --start 2025-04-01 --end 2025-04-07
+python3 research/fit_mlb_calibration.py --database data/research_v11.sqlite3 --training-end 2025-04-07 --minimum-games 100
+```
+
 `python3 main.py` intentionally exits with a live-execution-disabled message.
 
 For an independent local check of the unit suite, lockout behavior, and basic credential scan:
