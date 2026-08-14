@@ -53,9 +53,6 @@ class KalshiMarketStream:
         ticker_list = list(tickers or [])
         if ticker_list:
             params["market_tickers"] = ticker_list
-        # Required for a single YES-leg scale across yes/no deltas.
-        if "orderbook_delta" in params["channels"]:
-            params["use_yes_price"] = True
         return {"id": self._request_id, "cmd": "subscribe", "params": params}
 
     async def events(

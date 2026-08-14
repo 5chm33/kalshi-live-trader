@@ -66,3 +66,18 @@ Additional references:
 ### Live Diagnostic Result — 2026-08-14
 
 A read-only live request for Dallas daily maximum temperature (target 2026-08-15) using the legacy five-model request returned **191 actual values**, not 209: ECMWF IFS 51, ECMWF AIFS 51, ICON 40, GEFS 31, and UKMO global 18. The V11 parser reports these dynamic counts directly and the former 209-member claim is retired.
+
+## Historical Data and WebSocket Validation
+
+Kalshi’s official Historical Data documentation states that live and historical market/trade data are partitioned by a moving cutoff (target live window: approximately three months); an empirical study must route older markets/trades through `GET /historical/...` endpoints after checking `GET /historical/cutoff`. This is required for any retrospective strategy data collection.
+
+The official WebSocket documentation requires an authenticated handshake and specifies that `orderbook_delta` delivers an initial `orderbook_snapshot` followed by sequenced deltas. The synchronizer must treat a sequence gap as a required resnapshot, not continue with a stale book. The official orderbook description confirms fixed-point ascending YES and NO bid arrays, with asks implied by the reciprocal opposite-side best bid.
+
+A live, read-only V11 diagnostic on 2026-08-14 successfully connected to the official production WebSocket endpoint and reconstructed an initial snapshot for `KXMLBGAME-26AUG161920SEAHOU-SEA`: 21 YES levels, 15 NO levels, best YES bid $0.4200 and implied best YES ask $0.4900. No order or write request was sent.
+
+Additional references:
+
+[15] https://docs.kalshi.com/getting_started/historical_data
+[16] https://docs.kalshi.com/getting_started/quick_start_websockets
+[17] https://docs.kalshi.com/websockets/orderbook-updates
+[18] https://docs.kalshi.com/getting_started/orderbook_responses

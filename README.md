@@ -80,6 +80,12 @@ Inspect actual weather member counts without emitting a signal:
 python3 research/diagnose_weather.py --city dallas --kind high
 ```
 
+Capture sequence-checked, read-only order-book snapshots and deltas for currently live matched MLB contracts:
+
+```bash
+python3 research/capture_mlb_ws.py --config config.json --max-seconds 60
+```
+
 `python3 main.py` intentionally exits with a live-execution-disabled message.
 
 For an independent local check of the unit suite, lockout behavior, and basic credential scan:
