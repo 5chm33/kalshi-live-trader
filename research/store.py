@@ -183,6 +183,46 @@ CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_type, 
 CREATE INDEX IF NOT EXISTS idx_signals_strategy_time ON signals(strategy_version, created_at);
 CREATE INDEX IF NOT EXISTS idx_paper_orders_ticker ON paper_orders(ticker, created_at);
 CREATE INDEX IF NOT EXISTS idx_paper_fills_order ON paper_fills(paper_order_id);
+
+CREATE TABLE IF NOT EXISTS strategy_manifests (
+    manifest_id TEXT PRIMARY KEY,
+    strategy_family TEXT NOT NULL,
+    strategy_version TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    code_commit TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    payload_sha256 TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS decision_records (
+    record_sha256 TEXT PRIMARY KEY,
+    manifest_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    decision_timestamp TEXT NOT NULL,
+    dataset_sha256 TEXT NOT NULL,
+    previous_record_sha256 TEXT,
+    payload_json TEXT NOT NULL,
+    signature TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(manifest_id) REFERENCES strategy_manifests(manifest_id),
+    FOREIGN KEY(previous_record_sha256) REFERENCES decision_records(record_sha256)
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_snapshots (
+    snapshot_sha256 TEXT PRIMARY KEY,
+    manifest_id TEXT NOT NULL,
+    decision_record_sha256 TEXT NOT NULL,
+    dataset_sha256 TEXT NOT NULL,
+    code_commit TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    signature TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(manifest_id) REFERENCES strategy_manifests(manifest_id),
+    FOREIGN KEY(decision_record_sha256) REFERENCES decision_records(record_sha256)
+);
+
+CREATE INDEX IF NOT EXISTS idx_decision_records_manifest ON decision_records(manifest_id, decision_timestamp);
+CREATE INDEX IF NOT EXISTS idx_evaluation_snapshots_manifest ON evaluation_snapshots(manifest_id, created_at);
 """
 
 
@@ -505,7 +545,69 @@ class ResearchStore:
                  stamp.payload_sha256, self._json(raw)),
             )
 
+    def record_manifest(self, manifest: Any) -> None:
+        """Persist an immutable strategy manifest; same ID must have identical bytes."""
+        payload = manifest.payload
+        payload_json = self._json(payload)
+        with self.connect() as conn:
+            existing = conn.execute("SELECT payload_json FROM strategy_manifests WHERE manifest_id=?", (manifest.manifest_id,)).fetchone()
+            if existing is not None:
+                if existing["payload_json"] != payload_json:
+                    raise ValueError("manifest identity collision with different payload")
+                return
+            conn.execute(
+                """INSERT INTO strategy_manifests(manifest_id, strategy_family, strategy_version, created_at, code_commit, payload_json, payload_sha256)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (manifest.manifest_id, manifest.strategy_family, manifest.strategy_version, manifest.created_at,
+                 manifest.code_commit, payload_json, manifest.manifest_id),
+            )
+
+    def record_decision_record(self, record: Any, signature: str | None = None) -> None:
+        """Append a decision record; chaining cannot be rewritten or overwritten."""
+        payload_json = self._json(record.payload)
+        with self.connect() as conn:
+            if record.previous_record_sha256:
+                prior = conn.execute("SELECT 1 FROM decision_records WHERE record_sha256=?", (record.previous_record_sha256,)).fetchone()
+                if prior is None:
+                    raise ValueError("decision record predecessor is missing")
+            existing = conn.execute("SELECT payload_json, signature FROM decision_records WHERE record_sha256=?", (record.record_sha256,)).fetchone()
+            if existing is not None:
+                if existing["payload_json"] != payload_json or existing["signature"] != signature:
+                    raise ValueError("decision record identity collision with different payload/signature")
+                return
+            conn.execute(
+                """INSERT INTO decision_records(record_sha256, manifest_id, stage, decision_timestamp, dataset_sha256,
+                   previous_record_sha256, payload_json, signature, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (record.record_sha256, record.manifest_id, record.stage, record.decision_timestamp,
+                 record.dataset_sha256, record.previous_record_sha256, payload_json, signature,
+                 datetime.utcnow().isoformat() + "Z"),
+            )
+
+    def record_evaluation_snapshot(
+        self, snapshot_sha256: str, manifest_id: str, decision_record_sha256: str, dataset_sha256: str,
+        code_commit: str, result: Mapping[str, Any], signature: str | None = None,
+    ) -> None:
+        """Persist a signed result snapshot once; later database changes cannot replace it."""
+        result_json = self._json(result)
+        with self.connect() as conn:
+            existing = conn.execute("SELECT result_json, signature FROM evaluation_snapshots WHERE snapshot_sha256=?", (snapshot_sha256,)).fetchone()
+            if existing is not None:
+                if existing["result_json"] != result_json or existing["signature"] != signature:
+                    raise ValueError("evaluation snapshot identity collision with different payload/signature")
+                return
+            decision = conn.execute("SELECT manifest_id, dataset_sha256 FROM decision_records WHERE record_sha256=?", (decision_record_sha256,)).fetchone()
+            if decision is None or decision["manifest_id"] != manifest_id or decision["dataset_sha256"] != dataset_sha256:
+                raise ValueError("evaluation snapshot must reference matching decision record and dataset")
+            conn.execute(
+                """INSERT INTO evaluation_snapshots(snapshot_sha256, manifest_id, decision_record_sha256, dataset_sha256,
+                   code_commit, result_json, signature, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (snapshot_sha256, manifest_id, decision_record_sha256, dataset_sha256, code_commit,
+                 result_json, signature, datetime.utcnow().isoformat() + "Z"),
+            )
+
     def summary(self) -> dict[str, int]:
         with self.connect() as conn:
-            tables = ("observations", "signals", "paper_orders", "paper_fills", "paper_marks", "settlements")
+            tables = ("observations", "signals", "paper_orders", "paper_fills", "paper_marks", "settlements",
+                      "strategy_manifests", "decision_records", "evaluation_snapshots")
             return {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
