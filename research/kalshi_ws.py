@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 
 from research.kalshi_readonly import ReadOnlyKalshiClient
+from research.stream_health import StreamHealth
 
 WS_PRODUCTION = "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
 WS_DEMO = "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2"
@@ -31,6 +32,7 @@ class KalshiMarketStream:
         self.client = readonly_client
         self.ws_url = WS_PRODUCTION if environment == "production" else WS_DEMO
         self._request_id = 0
+        self.health = StreamHealth()
 
     def _headers(self) -> dict[str, str]:
         timestamp = str(int(time.time() * 1000))
@@ -72,6 +74,7 @@ class KalshiMarketStream:
                     ping_timeout=20,
                     max_queue=5000,
                 ) as websocket:
+                    self.health.connected()
                     await websocket.send(json.dumps(self._subscription(channels, tickers)))
                     delay = 0.5
                     async for message in websocket:
@@ -84,5 +87,6 @@ class KalshiMarketStream:
             except asyncio.CancelledError:
                 raise
             except Exception:
+                self.health.errored()
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, reconnect_max_seconds)

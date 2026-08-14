@@ -12,6 +12,7 @@ import json
 import logging
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -23,6 +24,7 @@ from research.kalshi_readonly import ReadOnlyKalshiClient
 from research.kalshi_ws import KalshiMarketStream
 from research.mlb_feed import MLBFeed
 from research.mlb_matcher import match_game_markets
+from research.models import SourceStamp, payload_hash
 from research.run_mlb_paper import load_config
 from research.store import ResearchStore
 from research.ws_book import SequenceGap, WebSocketBookSynchronizer
@@ -30,7 +32,10 @@ from research.ws_book import SequenceGap, WebSocketBookSynchronizer
 LOG = logging.getLogger("kalshi_research_v11.ws")
 
 
-def _book_payload(book: Any) -> dict[str, Any]:
+def _book_payload(book: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
+    source_to_receipt_ms = None
+    if book.stamp.source_at is not None:
+        source_to_receipt_ms = (book.stamp.received_at - book.stamp.source_at).total_seconds() * 1000
     return {
         "ticker": book.ticker,
         "yes_bids": [[str(level.price), str(level.quantity)] for level in book.yes_bids],
@@ -39,17 +44,23 @@ def _book_payload(book: Any) -> dict[str, Any]:
         "best_yes_ask": str(book.best_yes_ask) if book.best_yes_ask is not None else None,
         "best_no_bid": str(book.best_no_bid) if book.best_no_bid is not None else None,
         "best_no_ask": str(book.best_no_ask) if book.best_no_ask is not None else None,
+        "source_at": book.stamp.source_at.isoformat() if book.stamp.source_at else None,
+        "received_at": book.stamp.received_at.isoformat(),
+        "source_to_receipt_ms": source_to_receipt_ms,
+        "sid": payload.get("sid"),
+        "seq": payload.get("seq"),
+        "message_type": payload.get("type"),
     }
 
 
-async def capture_once(config_file: Path, max_seconds: int, max_updates: int) -> dict[str, int]:
+async def capture_once(config_file: Path, max_seconds: int, max_updates: int) -> dict[str, Any]:
     api_config, config = load_config(config_file)
     client = ReadOnlyKalshiClient(api_config, environment=config.environment)
     store = ResearchStore(config.database_path)
     games = MLBFeed().live_games()
     markets = [item for item in client.markets("KXMLBGAME").get("markets", []) if isinstance(item, Mapping)]
     tickers = sorted({mapping.ticker for game in games for mapping in match_game_markets(game, markets)})
-    summary = {"live_games": len(games), "matched_tickers": len(tickers), "book_updates": 0, "sequence_gaps": 0}
+    summary: dict[str, Any] = {"mode": "paper_only_no_orders", "live_games": len(games), "matched_tickers": len(tickers), "book_updates": 0, "sequence_gaps": 0, "ticker_coverage": {ticker: 0 for ticker in tickers}}
     if not tickers:
         return summary
 
@@ -65,12 +76,18 @@ async def capture_once(config_file: Path, max_seconds: int, max_updates: int) ->
             # Do not treat the potentially stale book as valid. The next stream
             # reconnect/snapshot is the only permissible recovery.
             summary["sequence_gaps"] += 1
+            stream.health.gap()
             LOG.warning("Discarded WebSocket book after sequence gap: %s", error)
             break
         if book is None:
             continue
-        store.record_observation(book.stamp, "kalshi_ws_orderbook", book.ticker, _book_payload(book))
+        stream.health.message(book.stamp.source_at, book.stamp.received_at)
+        store.record_observation(book.stamp, "kalshi_ws_orderbook", book.ticker, _book_payload(book, payload))
         summary["book_updates"] += 1
+        summary["ticker_coverage"][book.ticker] = int(summary["ticker_coverage"].get(book.ticker, 0)) + 1
+    summary.update(stream.health.payload())
+    health_stamp = SourceStamp("kalshi_ws_health", None, datetime.now(timezone.utc), payload_hash(summary))
+    store.record_observation(health_stamp, "kalshi_ws_health", "mlb_capture_cycle", summary)
     return summary
 
 

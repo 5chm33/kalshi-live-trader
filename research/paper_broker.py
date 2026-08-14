@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
+from research.execution_realism import TakerExecutionPolicy
 from research.fees import conservative_rounding_reserve, estimate_fee
 from research.models import (
     CanonicalBook,
@@ -26,8 +27,9 @@ from research.models import (
 class PaperBroker:
     """Fee-aware paper broker for binary Kalshi books."""
 
-    def __init__(self, fee_multiplier: Decimal | str = Decimal("1")):
+    def __init__(self, fee_multiplier: Decimal | str = Decimal("1"), execution_policy: TakerExecutionPolicy | None = None):
         self.fee_multiplier = decimal(fee_multiplier)
+        self.execution_policy = execution_policy
 
     @staticmethod
     def _opposite_levels(book: CanonicalBook, outcome_side: str) -> tuple[BookLevel, ...]:
@@ -77,11 +79,27 @@ class PaperBroker:
             metadata={"signal_id": signal.signal_id, "mode": "paper"},
         )
 
-    def execute(self, order: PaperOrder, book: CanonicalBook) -> PaperFill | None:
-        """Paper-fill an order using only depth displayed at the snapshot time."""
+    def execute(self, order: PaperOrder, book: CanonicalBook, decision_at: datetime | None = None) -> PaperFill | None:
+        """Paper-fill a marketable/taker order against displayed depth.
+
+        When a TakerExecutionPolicy is supplied, an over-age snapshot is rejected
+        and each displayed price receives a conservative latency haircut. Maker
+        orders, queue position, and partial-fill waiting are intentionally not
+        represented by this model.
+        """
         if order.ticker != book.ticker:
             raise ValueError("order ticker and book ticker differ")
+        policy_metadata: dict[str, str] = {}
         levels = self._opposite_levels(book, order.outcome_side)
+        if self.execution_policy is not None:
+            if not self.execution_policy.is_fresh(book, decision_at):
+                return None
+            haircut = self.execution_policy.adverse_price_haircut
+            levels = tuple(
+                BookLevel(price=min(ONE, level.price + haircut), quantity=level.quantity)
+                for level in levels
+            )
+            policy_metadata = self.execution_policy.metadata(book, decision_at)
         filled, avg_price = self._walk(levels, order.requested_contracts, order.limit_price)
         if filled <= ZERO:
             return None
@@ -105,5 +123,6 @@ class PaperBroker:
                 "book_payload_sha256": book.stamp.payload_sha256,
                 "limit_price": str(order.limit_price),
                 "partial_fill": str(filled < order.requested_contracts).lower(),
+                **policy_metadata,
             },
         )
