@@ -22,22 +22,19 @@ def main() -> None:
     parser.add_argument("--start", type=date.fromisoformat, required=True)
     parser.add_argument("--end", type=date.fromisoformat, required=True)
     parser.add_argument("--max-games-per-day", type=int, default=20)
-    parser.add_argument("--sleep-seconds", type=float, default=0.0, help="courteous delay between completed games")
+    parser.add_argument("--workers", type=int, default=4, help="bounded concurrent public feed requests per date")
+    parser.add_argument("--sleep-seconds", type=float, default=0.0, help="courteous delay between calendar dates")
     args = parser.parse_args()
-    if args.end < args.start or args.max_games_per_day <= 0 or args.sleep_seconds < 0:
-        raise ValueError("invalid date range, max-games-per-day, or sleep-seconds")
+    if args.end < args.start or args.max_games_per_day <= 0 or args.workers <= 0 or args.sleep_seconds < 0:
+        raise ValueError("invalid date range, max-games-per-day, workers, or sleep-seconds")
 
     collector = MLBHistoricalCollector(ResearchStore(args.database))
     current = args.start
     results = []
     while current <= args.end:
-        ids = collector.game_ids(current)[:args.max_games_per_day]
-        states = 0
-        for game_pk in ids:
-            states += collector.collect_game(game_pk, current)
-            if args.sleep_seconds:
-                time.sleep(args.sleep_seconds)
-        results.append({"date": current.isoformat(), "games": len(ids), "states_seen": states, "stored_total": collector.store.historical_mlb_state_count()})
+        results.append(collector.collect_date(current, max_games=args.max_games_per_day, workers=args.workers))
+        if args.sleep_seconds:
+            time.sleep(args.sleep_seconds)
         current += timedelta(days=1)
     print(json.dumps(results, indent=2, sort_keys=True))
 
