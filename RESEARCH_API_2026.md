@@ -50,3 +50,19 @@ Additional references:
 
 [10] https://kalshi.com/docs/kalshi-fee-schedule.pdf
 [11] https://docs.kalshi.com/changelog
+
+## Verified Weather Data Notes
+
+Open-Meteo’s Ensemble API documents individual member forecasts, including 51-member ECMWF IFS, 51-member AIFS, 31-member GFS, and 40-member ICON global ensembles. The number of returned members is model- and request-dependent; V11 must count the actual parsed values in every payload rather than advertise a fixed combined total. Open-Meteo also documents an Historical Forecast API (coverage approximately 2021/2022 onward) and a Previous Runs / Single Runs distinction suitable for fixed-lead forecast evaluation.
+
+For U.S. weather settlement validation, the NWS API documents forecast, alert, and observation access at `api.weather.gov`. It requires an identifying User-Agent and notes that observations may be delayed by up to 20 minutes after upstream QC. Consequently, NWS observation data cannot be used as an unqualified low-latency settlement proxy; each Kalshi weather series must be explicitly mapped to its published settlement source.
+
+Additional references:
+
+[12] https://open-meteo.com/en/docs/ensemble-api
+[13] https://open-meteo.com/en/docs/historical-forecast-api
+[14] https://www.weather.gov/documentation/services-web-api
+
+### Live Diagnostic Result — 2026-08-14
+
+A read-only live request for Dallas daily maximum temperature (target 2026-08-15) using the legacy five-model request returned **191 actual values**, not 209: ECMWF IFS 51, ECMWF AIFS 51, ICON 40, GEFS 31, and UKMO global 18. The V11 parser reports these dynamic counts directly and the former 209-member claim is retired.
