@@ -1,0 +1,6 @@
+V11 weather settlement-mapped v1.0.1 prospective dataset descriptor
+Prospective-window start: 2026-08-14T17:31:04Z
+All observations with a received timestamp before this boundary are excluded from v1.0.1 evaluation.
+Eligible prospective universe: KXHIGHNY, KXLOWNY, KXHIGHTDC, KXLOWTDC.
+Required later evaluation fields: station-mapped ensemble snapshot, executable book observation preceding decision, fee/tick evidence, and final official settlement.
+Code revision: f50ff27070936ba4593a60b657bc738c0a80b414.

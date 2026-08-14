@@ -1,0 +1,31 @@
+{
+  "strategy_family": "weather_settlement_mapped",
+  "strategy_version": "v1.0.1",
+  "hypothesis": "A station-mapped, calibrated ensemble forecast may have positive fee- and depth-adjusted entry-to-settlement expectancy only after prospectively recorded forecast, quote, and official settlement evidence is sufficient.",
+  "market_universe": {
+    "frozen_at": "2026-08-14T17:31:04Z",
+    "series": ["KXHIGHNY", "KXLOWNY", "KXHIGHTDC", "KXLOWTDC"],
+    "stations": {"KXHIGHNY": "KNYC", "KXLOWNY": "KNYC", "KXHIGHTDC": "KDCA", "KXLOWTDC": "KDCA"},
+    "excluded": ["all politics", "all unmapped weather series", "range contracts until exact tie semantics are independently verified"]
+  },
+  "feature_schema": {
+    "target_date": "ISO local date at settlement station",
+    "settlement_station": "Weather Company portal station identifier",
+    "ensemble_members": "actual returned decimal member values by model",
+    "market_floor_strike": "decimal or null",
+    "market_cap_strike": "decimal or null",
+    "book_timestamp": "UTC ISO timestamp required before any paper candidate"
+  },
+  "training_start": "2025-01-01T00:00:00+00:00",
+  "training_end": "2026-08-14T17:31:03+00:00",
+  "holdout_start": "2026-08-14T17:31:04+00:00",
+  "holdout_end": "2026-12-31T23:59:59+00:00",
+  "first_prospective_at": "2026-08-14T17:31:04+00:00",
+  "primary_metric": "one-sided 95% cluster-bootstrap lower confidence bound of fee- and depth-adjusted net dollars per contract, entry-to-settlement only",
+  "confidence_interval_method": "cluster bootstrap by settlement date",
+  "lower_confidence_bound_threshold": "0.00",
+  "calibration_error_limit": "0.02",
+  "max_variants": 1,
+  "execution_lifecycle": "entry_to_settlement",
+  "code_commit": "f50ff27070936ba4593a60b657bc738c0a80b414"
+}

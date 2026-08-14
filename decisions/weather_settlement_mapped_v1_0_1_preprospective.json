@@ -1,0 +1,22 @@
+{
+  "manifest_id": "replaced by record_decision.py",
+  "stage": "pre_prospective",
+  "dataset_sha256": "2bb4a8c559ec46c67b734d17471ee3da087fcc7696dd923903bb8942859da3cc",
+  "available_data_ends_at": "2026-08-14T17:31:03Z",
+  "decision_timestamp": "2026-08-14T17:31:04Z",
+  "exclusions": {
+    "received_before_prospective_window": "exclude",
+    "unmapped_weather_series": "exclude",
+    "range_contracts": "exclude until exact tie and full-precision settlement semantics are independently verified",
+    "missing_book_timestamp": "exclude",
+    "preliminary_or_revised_settlement_values": "exclude unless matching the first official non-preliminary source used by contract resolution",
+    "missing_fee_or_tick_metadata": "exclude",
+    "any_decision_using_data_after_its_timestamp": "exclude"
+  },
+  "primary_endpoint": "one-sided 95% cluster-bootstrap lower confidence bound of fee- and depth-adjusted entry-to-settlement net dollars per contract",
+  "promotion_rule": "No promotion from V11 research. A separate review may be requested only if the pre-registered lower confidence bound is greater than zero, calibration error is at most 0.02, and all timing, settlement, fee, and liquidity evidence is complete.",
+  "retirement_rule": "Retire v1.0.1 after the registered sample if the lower confidence bound is less than or equal to zero under every pre-registered latency and fee sensitivity.",
+  "more_data_rule": "Collect more data only if the registered sample-size target has not been reached or the confidence interval contains zero. Do not introduce unregistered feature variants.",
+  "falsifier": "A negative lower confidence bound under the pre-registered station-mapped, entry-to-settlement calculation falsifies the v1.0.1 hypothesis.",
+  "previous_record_sha256": null
+}
