@@ -10,6 +10,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from research.store import ResearchStore
+
 
 @dataclass(frozen=True)
 class BinStats:
@@ -41,6 +43,8 @@ def _connect(path: str | Path) -> sqlite3.Connection:
 
 def evaluate(database_path: str | Path) -> dict[str, Any]:
     """Evaluate only settled candidates and paper fills. Never invent outcomes."""
+    # Runs forward-compatible CREATE TABLE migrations before direct analytical reads.
+    ResearchStore(database_path)
     with _connect(database_path) as conn:
         settlements = {
             row["ticker"]: row["result"]
