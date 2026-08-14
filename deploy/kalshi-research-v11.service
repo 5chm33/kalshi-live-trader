@@ -1,0 +1,21 @@
+[Unit]
+Description=Kalshi V11 paper-only research collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/kalshi_research_v11
+ExecStart=/usr/bin/python3 /home/ubuntu/kalshi_research_v11/research/daemon.py --config /home/ubuntu/kalshi_research_v11/config.json --interval-seconds 60
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/ubuntu/kalshi_research_v11/data /home/ubuntu/kalshi_research_v11/logs
+StandardOutput=append:/home/ubuntu/kalshi_research_v11/logs/collector.log
+StandardError=append:/home/ubuntu/kalshi_research_v11/logs/collector.log
+
+[Install]
+WantedBy=multi-user.target
