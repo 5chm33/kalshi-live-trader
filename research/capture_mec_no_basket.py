@@ -27,6 +27,7 @@ def run_cycle(client: ReadOnlyKalshiClient, store: ResearchStore, max_events: in
     page = client.get("/events", {"status": "open", "limit": 200})
     events = [event for event in page.get("events", []) if isinstance(event, dict)]
     scanned = blocked = eligible_events = eligible_legs = candidates = stored = errors = 0
+    error_samples: list[str] = []
     for event in events:
         if scanned >= max_events:
             break
@@ -79,12 +80,14 @@ def run_cycle(client: ReadOnlyKalshiClient, store: ResearchStore, max_events: in
             }
             now = datetime.now(timezone.utc)
             stored += int(store.record_observation(SourceStamp("kalshi_rest_mec_no_basket", now, None, payload_hash(record)), "mec_no_basket", event_ticker, record))
-        except Exception:
+        except Exception as exc:
             errors += 1
+            if len(error_samples) < 5:
+                error_samples.append(f"{event_ticker}: {type(exc).__name__}: {exc}")
     return {
         "mode": "paper_only_no_orders", "events_returned": len(events), "events_scanned": scanned,
         "political_blocked": blocked, "eligible_events": eligible_events, "eligible_legs": eligible_legs,
-        "candidates": candidates, "observations_stored": stored, "errors": errors,
+        "candidates": candidates, "observations_stored": stored, "errors": errors, "error_samples": error_samples,
     }
 
 
