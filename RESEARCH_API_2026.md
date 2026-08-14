@@ -95,3 +95,17 @@ References:
 [19] https://docs.kalshi.com/api-reference/historical/get-historical-markets
 [20] https://docs.kalshi.com/api-reference/historical/get-historical-market-candlesticks
 [21] https://docs.kalshi.com/api-reference/market/batch-get-market-candlesticks
+
+## Event and Structural-Parity Constraints — 2026-08-14
+
+- Official event discovery is `GET /events`; `limit` is capped at 200, response pagination uses `cursor`, and `with_nested_markets=true` can include event markets. `GET /events/{event_ticker}` returns an event and associated markets. Sources: https://docs.kalshi.com/api-reference/events/get-events and https://docs.kalshi.com/api-reference/events/get-event.
+- `mutually_exclusive=true` proves only that no more than one market can resolve YES. It does **not** prove a YES resolution is exhaustive. Kalshi’s official collateral-return example explicitly includes an outcome in which every named mutually exclusive market resolves NO. V11 therefore excludes a naive “buy every YES” multi-outcome calculation from risk-free parity research. Source: https://help.kalshi.com/en/articles/13823816-collateral-return.
+- V11 recognizes a structural directional cover only when API strike metadata proves it: two binary, same-event, upper-tail markets with non-null `floor_strike`, null `cap_strike`, and strictly ordered floors. Long YES on the lower threshold plus long NO on the higher threshold guarantees at least one payout. The collector requires visible two-sided depth, modeled fees, rounding reserve, and an additional atomicity reserve.
+- The new `kalshi-research-v11-parity.service` is a signed-GET-only, paper-only service. It records binary-complement and directional-cover snapshots every 300 seconds; it has no POST, PUT, PATCH, DELETE, or live order module.
+
+References:
+
+[22] https://docs.kalshi.com/api-reference/events/get-events
+[23] https://docs.kalshi.com/api-reference/events/get-event
+[24] https://help.kalshi.com/en/articles/13823816-collateral-return
+[25] https://docs.kalshi.com/api-reference/market/get-market-orderbook
