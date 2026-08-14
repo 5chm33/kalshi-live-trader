@@ -354,6 +354,33 @@ class ResearchStore:
                 ),
             )
 
+    def record_historical_candles(
+        self, ticker: str, candles: list[Mapping[str, Any]], retrieved_at: datetime
+    ) -> None:
+        def nested_close(candle: Mapping[str, Any], key: str) -> Any:
+            value = candle.get(key)
+            return value.get("close_dollars", value.get("close")) if isinstance(value, Mapping) else None
+        rows = [
+            (
+                ticker, int(candle["end_period_ts"]), nested_close(candle, "yes_bid"),
+                nested_close(candle, "yes_ask"), nested_close(candle, "price"),
+                candle.get("volume_fp", candle.get("volume")),
+                candle.get("open_interest_fp", candle.get("open_interest")),
+                json.dumps(dict(candle), sort_keys=True, default=str), retrieved_at.isoformat(),
+            )
+            for candle in candles if isinstance(candle, Mapping) and candle.get("end_period_ts") is not None
+        ]
+        if not rows:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                """INSERT OR REPLACE INTO kalshi_historical_candles(
+                    ticker, end_period_ts, yes_bid_close, yes_ask_close, price_close,
+                    volume_fp, open_interest_fp, raw_json, retrieved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
+
     def record_mlb_historical_state(self, row: Mapping[str, Any], stamp: SourceStamp) -> None:
         """Persist one immutable completed-game state used for calibration."""
         with self.connect() as conn:

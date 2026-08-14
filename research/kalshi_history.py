@@ -47,10 +47,9 @@ class KalshiHistoricalMLBCollector:
                 start = int((close_time - timedelta(hours=12)).timestamp())
                 end = int((close_time + timedelta(hours=1)).timestamp())
                 payload = self.client.historical_candlesticks(str(market["ticker"]), start, end, 1)
-                for candle in payload.get("candlesticks", []):
-                    if isinstance(candle, Mapping):
-                        self.store.record_historical_candle(str(market["ticker"]), candle, now)
-                        candles += 1
+                market_candles = [item for item in payload.get("candlesticks", []) if isinstance(item, Mapping)]
+                self.store.record_historical_candles(str(market["ticker"]), market_candles, now)
+                candles += len(market_candles)
                 if found >= max_markets:
                     break
             if found >= max_markets:
