@@ -416,9 +416,29 @@ class ResearchStore:
             )
 
     def record_mlb_historical_state(self, row: Mapping[str, Any], stamp: SourceStamp) -> None:
-        """Persist one immutable completed-game state used for calibration."""
+        """Persist one completed-game state used for calibration."""
+        self.record_mlb_historical_states([(row, stamp)])
+
+    def record_mlb_historical_states(self, records: list[tuple[Mapping[str, Any], SourceStamp]]) -> None:
+        """Persist one completed game in a single durable transaction."""
+        values = [
+            (
+                str(row["game_pk"]), int(row["at_bat_index"]), str(row["game_date"]),
+                int(row["inning"]), str(row["inning_half"]),
+                int(row["outs"]) if row.get("outs") is not None else None,
+                int(bool(row["leader_is_home"])), int(row["lead_runs"]),
+                int(row["away_runs"]), int(row["home_runs"]), row.get("away_team"), row.get("home_team"),
+                int(bool(row["leader_won"])), stamp.source,
+                stamp.source_at.isoformat() if stamp.source_at else None,
+                stamp.received_at.isoformat(), stamp.payload_sha256,
+                json.dumps(dict(row), sort_keys=True, default=str),
+            )
+            for row, stamp in records
+        ]
+        if not values:
+            return
         with self.connect() as conn:
-            conn.execute(
+            conn.executemany(
                 """INSERT INTO mlb_historical_states(
                     game_pk, at_bat_index, game_date, inning, inning_half, outs,
                     leader_is_home, lead_runs, away_runs, home_runs, away_team, home_team, leader_won,
@@ -428,16 +448,7 @@ class ResearchStore:
                   away_team=excluded.away_team, home_team=excluded.home_team,
                   source_at=excluded.source_at, received_at=excluded.received_at,
                   payload_sha256=excluded.payload_sha256, raw_json=excluded.raw_json""",
-                (
-                    str(row["game_pk"]), int(row["at_bat_index"]), str(row["game_date"]),
-                    int(row["inning"]), str(row["inning_half"]),
-                    int(row["outs"]) if row.get("outs") is not None else None,
-                    int(bool(row["leader_is_home"])), int(row["lead_runs"]),
-                    int(row["away_runs"]), int(row["home_runs"]), row.get("away_team"), row.get("home_team"),
-                    int(bool(row["leader_won"])), stamp.source, stamp.source_at.isoformat() if stamp.source_at else None,
-                    stamp.received_at.isoformat(), stamp.payload_sha256,
-                    json.dumps(dict(row), sort_keys=True, default=str),
-                ),
+                values,
             )
 
     def historical_mlb_state_count(self) -> int:

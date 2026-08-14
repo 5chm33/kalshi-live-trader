@@ -64,7 +64,7 @@ class MLBHistoricalCollector:
         if not away_team or not home_team:
             return 0
         plays = payload.get("liveData", {}).get("plays", {}).get("allPlays", [])
-        recorded = 0
+        records: list[tuple[Mapping[str, Any], SourceStamp]] = []
         for play in plays:
             about = play.get("about", {}) if isinstance(play.get("about"), Mapping) else {}
             result = play.get("result", {}) if isinstance(play.get("result"), Mapping) else {}
@@ -97,9 +97,9 @@ class MLBHistoricalCollector:
                 received_at=datetime.now(timezone.utc),
                 payload_sha256=payload_hash(raw),
             )
-            self.store.record_mlb_historical_state(raw, stamp)
-            recorded += 1
-        return recorded
+            records.append((raw, stamp))
+        self.store.record_mlb_historical_states(records)
+        return len(records)
 
     def collect_date(self, target_date: date, max_games: int | None = None) -> dict[str, int]:
         ids = self.game_ids(target_date)
