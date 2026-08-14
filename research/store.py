@@ -161,6 +161,24 @@ CREATE TABLE IF NOT EXISTS kalshi_historical_candles (
 CREATE INDEX IF NOT EXISTS idx_kalshi_historical_candles_ticker_time
 ON kalshi_historical_candles(ticker, end_period_ts);
 
+CREATE TABLE IF NOT EXISTS mlb_quote_study (
+    game_pk TEXT NOT NULL,
+    at_bat_index INTEGER NOT NULL,
+    ticker TEXT NOT NULL,
+    state_source_at TEXT NOT NULL,
+    candle_end_period_ts INTEGER NOT NULL,
+    quote_delay_seconds REAL NOT NULL,
+    yes_bid_close TEXT,
+    yes_ask_close TEXT,
+    leader_won INTEGER NOT NULL CHECK(leader_won IN (0, 1)),
+    mapping_method TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(game_pk, at_bat_index, ticker)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mlb_quote_study_ticker_time
+ON mlb_quote_study(ticker, candle_end_period_ts);
+
 CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_type, entity_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_signals_strategy_time ON signals(strategy_version, created_at);
 CREATE INDEX IF NOT EXISTS idx_paper_orders_ticker ON paper_orders(ticker, created_at);
@@ -379,6 +397,22 @@ class ResearchStore:
                     volume_fp, open_interest_fp, raw_json, retrieved_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 rows,
+            )
+
+    def record_mlb_quote_study(self, row: Mapping[str, Any], created_at: datetime) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO mlb_quote_study(
+                    game_pk, at_bat_index, ticker, state_source_at, candle_end_period_ts,
+                    quote_delay_seconds, yes_bid_close, yes_ask_close, leader_won,
+                    mapping_method, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(row["game_pk"]), int(row["at_bat_index"]), str(row["ticker"]),
+                    str(row["state_source_at"]), int(row["candle_end_period_ts"]),
+                    float(row["quote_delay_seconds"]), row.get("yes_bid_close"), row.get("yes_ask_close"),
+                    int(bool(row["leader_won"])), str(row["mapping_method"]), created_at.isoformat(),
+                ),
             )
 
     def record_mlb_historical_state(self, row: Mapping[str, Any], stamp: SourceStamp) -> None:
