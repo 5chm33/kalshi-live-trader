@@ -11,7 +11,7 @@ from typing import Iterable, Mapping
 POLITICAL_KEYWORDS = frozenset({
     "election", "president", "presidential", "governor", "senate", "senator",
     "congress", "congressional", "democrat", "republican", "primary", "ballot",
-    "referendum", "nominee", "nomination", "cabinet", "political", "vote",
+    "referendum", "nominee", "nomination", "cabinet", "political", "politics", "vote",
 })
 
 

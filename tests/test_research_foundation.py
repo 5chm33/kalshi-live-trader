@@ -86,6 +86,10 @@ class ResearchFoundationTests(unittest.TestCase):
             {"status": "open", "series_ticker": "KXPRES", "title": "Presidential election"},
             ["KXMLBGAME"],
         ).allowed)
+        self.assertFalse(market_eligibility(
+            {"status": "open", "series_ticker": "KXTEST", "category": "Politics", "title": "Any title"},
+            ["KXTEST"],
+        ).allowed)
 
     def test_store_is_idempotent_for_raw_observations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
