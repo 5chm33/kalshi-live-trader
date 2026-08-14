@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -21,15 +22,22 @@ def main() -> None:
     parser.add_argument("--start", type=date.fromisoformat, required=True)
     parser.add_argument("--end", type=date.fromisoformat, required=True)
     parser.add_argument("--max-games-per-day", type=int, default=20)
+    parser.add_argument("--sleep-seconds", type=float, default=0.0, help="courteous delay between completed games")
     args = parser.parse_args()
-    if args.end < args.start or args.max_games_per_day <= 0:
-        raise ValueError("invalid date range or max-games-per-day")
+    if args.end < args.start or args.max_games_per_day <= 0 or args.sleep_seconds < 0:
+        raise ValueError("invalid date range, max-games-per-day, or sleep-seconds")
 
     collector = MLBHistoricalCollector(ResearchStore(args.database))
     current = args.start
     results = []
     while current <= args.end:
-        results.append(collector.collect_date(current, max_games=args.max_games_per_day))
+        ids = collector.game_ids(current)[:args.max_games_per_day]
+        states = 0
+        for game_pk in ids:
+            states += collector.collect_game(game_pk, current)
+            if args.sleep_seconds:
+                time.sleep(args.sleep_seconds)
+        results.append({"date": current.isoformat(), "games": len(ids), "states_seen": states, "stored_total": collector.store.historical_mlb_state_count()})
         current += timedelta(days=1)
     print(json.dumps(results, indent=2, sort_keys=True))
 
