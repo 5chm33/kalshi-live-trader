@@ -1,82 +1,97 @@
-# Kalshi Live Trader v10
+# Kalshi V11 Paper-Only Research System
 
-Automated prediction-market research prototype for [Kalshi](https://kalshi.com). It combines a polling-based sports signal detector, an experimental weather ensemble, and a tennis value prototype.
+This repository is a **reproducible, paper-only prediction-market research project**. It does not claim profitability, and it does not permit live exchange execution. The prior V10 prototype is retired because it had material execution, accounting, and data-contract defects.
 
-> **Important:** This repository is public for independent code review. It is **not validated as profitable**, is **not high-frequency trading**, and contains known blocking integration defects. Read [AUDIT_STATUS.md](AUDIT_STATUS.md) before running it. Do not use it unattended or with money you cannot afford to lose.
+> **Status: research only.** The system uses authenticated `GET` requests to capture Kalshi data, but its code path contains no order creation, amendment, cancellation, or exit capability. Nothing in this repository should be used as a basis for committing real money.
 
-The project’s current behavior and limitations are documented in the audit; the architecture below describes intended components, not a guarantee that every component is currently wired into the execution loop.
+## What V11 Actually Does
 
+| Component | Current behavior | Status |
+|---|---|---|
+| Kalshi account data | Read-only balance, positions, fills, resting-order, market, and order-book snapshots | Implemented |
+| Market data | Fixed-point binary order-book normalization with executable-side depth | Implemented |
+| Paper ledger | SQLite observations, signals, paper orders, paper fills, marks, and settlements | Implemented |
+| MLB hypothesis | Records exact late-lead game states and matching Kalshi quotes | Implemented; no probability model or paper fills until calibrated |
+| Weather research | Parses the actual returned Open-Meteo ensemble members and records dynamic counts | Implemented; no market/settlement mapping or signal path |
+| Tennis research | Enforces a complete set-level score contract before a comeback rule can be studied | Disabled pending a verified score source |
+| Live trading | Production-order path | **Hard disabled** |
 
-## Architecture
+## Why the Old Claims Were Retired
 
-```
-main.py (orchestrator)
-├── Fast Loop (10s) — Sports + Tennis
-│   ├── ESPN Live Score Feed → Score change detection
-│   ├── Market Matcher → Links ESPN games to Kalshi tickers
-│   ├── Latency Sniper → Buys stale prices after score changes
-│   └── Tennis Value → Rankings-based value + volatility plays
-│
-├── Slow Loop (180s) — Weather
-│   └── Experimental multi-model ensemble (live member count must be verified)
-│
-└── Position Manager — Trailing stops, profit targets, time exits
-```
+The original prototype presented unsupported claims around “HFT,” a 209-member weather ensemble, strategy coverage, and profitability. The verified V11 weather diagnostic returned **191** usable values for the five-model request: ECMWF IFS 51, ECMWF AIFS 51, ICON 40, GEFS 31, and UKMO 18. It also confirmed that the old system was polling rather than operating a live market-data HFT stack. See [AUDIT_STATUS.md](AUDIT_STATUS.md) and [RESEARCH_API_2026.md](RESEARCH_API_2026.md).
 
-## Strategies
+## Safety Properties
 
-### 1. Polling-Based Sports Signal Detector (MLB implemented)
-Polls ESPN score updates and evaluates a heuristic late-game baseball rule. The checked-in implementation is **MLB-only**, uses a 10-second REST polling loop, and does not implement a live WebSocket subscription or demonstrate exploitable latency after fees and fills.
+The system’s guardrails are intentional architectural restrictions, not settings that can be toggled in a configuration file.
 
-- **Baseball Late Lead**: A heuristic for teams up 3+ runs in the sixth inning or later; its net profitability has not been validated.
-- **Score Change Handling**: IOC orders may be submitted after detected score changes; no latency advantage has been demonstrated.
+| Safeguard | Behavior |
+|---|---|
+| Paper-only hard lock | Any mode other than `paper` is rejected. |
+| Political-market block | Markets with conservative political/election keywords are rejected. |
+| Read-only API client | V11 exposes signed `GET` only. It has no HTTP mutation method. |
+| Depth-aware paper fills | The paper broker consumes only displayed opposing-book depth and can partially fill or reject a candidate. |
+| Fee accounting | Paper fills include a documented taker-fee estimate and rounding reserve. |
+| Durable state | SQLite records raw observations, signals, fills, and recorded settlement outcomes. |
+| Calibration gate | The MLB detector cannot emit a signal until a separately fitted, versioned probability model is supplied. |
 
-### 2. Experimental Weather Ensemble (member count must be validated live)
-The engine requests five global weather-model families for temperature forecasting:
-- ECMWF IFS (51 members)
-- ECMWF AIFS (51 members)
-- GFS (31 members)
-- ICON (40 members)
-- UKMO (36 members)
+## Commands
 
-Quality filters: 25% min edge for range markets, 55% confidence floor, 45c max NO price.
+Create a local `config.json` (never commit it):
 
-### 3. Experimental Tennis Value
-- Coarse rankings-based heuristic when the market underprices a favorite
-- An intended comeback heuristic; the current score feed does **not** provide the first-set state required to verify the claimed first-set-loss rule
-
-## Setup
-
-1. Clone this repo
-2. Create `config.json`:
 ```json
 {
   "api_key": "your-kalshi-api-key",
-  "private_key_string": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+  "private_key_string": "YOUR_RSA_PRIVATE_KEY_PEM",
+  "research": {
+    "mode": "paper",
+    "environment": "production",
+    "database_path": "data/research_v11.sqlite3"
+  }
 }
 ```
-3. Install dependencies: `pip install -r requirements.txt`
-4. Run: `python3 main.py`
 
-## API
+Install dependencies:
 
-Uses Kalshi V2 API with:
-- **IOC orders** (Immediate-Or-Cancel) supported by the order client; they do not establish that a stale-price fill is available.
-- **RSA-PSS signing** for authentication
-- Rate-limited to 20 req/sec (well under 30/sec advanced tier limit)
+```bash
+python3 -m pip install -r requirements.txt
+```
 
-## Intended Risk Controls (not independently verified)
+Run one read-only MLB collection cycle:
 
-- Max 8 concurrent positions
-- Max 50% of balance at risk
-- Max 20% per trade
-- Trailing stop: 20% from peak
-- Hard stop loss: -35%
-- Profit target: auto-sell at 90c
-- Time exit: 2 hours max hold for flat positions
+```bash
+python3 research/run_mlb_paper.py --config config.json
+```
 
-## Requirements
+Run the persistent paper collector:
 
-- Python 3.10+
-- Kalshi Advanced tier API access
-- `requests` and `cryptography` packages
+```bash
+python3 research/daemon.py --config config.json --interval-seconds 60
+```
+
+Inspect the local evidence ledger:
+
+```bash
+python3 research/run_evaluation.py --database data/research_v11.sqlite3
+```
+
+Inspect actual weather member counts without emitting a signal:
+
+```bash
+python3 research/diagnose_weather.py --city dallas --kind high
+```
+
+`python3 main.py` intentionally exits with a live-execution-disabled message.
+
+## Evidence Standard Before Any Future Live-Readiness Review
+
+A future live-readiness review would require, at minimum, a full documented settlement-source map, fee- and depth-aware paper data, durable reconciliation after restarts, a pre-registered calibration method, adequate out-of-sample sample size, and positive net results after costs. The current system does **not** meet that bar.
+
+## References
+
+[1] [Kalshi API Documentation](https://docs.kalshi.com/)
+
+[2] [Kalshi Fee Schedule](https://kalshi.com/docs/kalshi-fee-schedule.pdf)
+
+[3] [Open-Meteo Ensemble API](https://open-meteo.com/en/docs/ensemble-api)
+
+[4] [MLB Stats API](https://statsapi.mlb.com/)
