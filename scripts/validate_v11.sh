@@ -3,6 +3,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+missing=()
+for module in requests cryptography websockets; do
+  if ! python3 -c "import ${module}" >/dev/null 2>&1; then
+    missing+=("${module}")
+  fi
+done
+if [[ "${#missing[@]}" -gt 0 ]]; then
+  echo "FAIL: missing declared dependencies: ${missing[*]}" >&2
+  echo "Run: python3 -m pip install -r requirements.txt" >&2
+  echo "For an isolated fresh-environment check run: scripts/validate_clean_env.sh" >&2
+  exit 2
+fi
+
 python3 -m compileall -q research main.py
 python3 -m unittest discover -s tests -v
 

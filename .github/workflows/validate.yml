@@ -1,0 +1,21 @@
+name: V11 Validation
+
+on:
+  push:
+    branches: [research-v11]
+  pull_request:
+    branches: [research-v11]
+
+permissions:
+  contents: read
+
+jobs:
+  clean-environment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate in fresh virtual environment
+        run: scripts/validate_clean_env.sh
