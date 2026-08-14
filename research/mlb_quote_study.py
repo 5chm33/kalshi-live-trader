@@ -45,7 +45,22 @@ def build_quote_study(database: str | Path, max_quote_delay_seconds: int = 120) 
         "SELECT ticker, event_ticker FROM kalshi_historical_markets WHERE event_ticker LIKE 'KXMLBGAME-%'"
     ).fetchall()
     matched = missing_market = missing_quote = 0
-    market_rows = [dict(row) for row in markets]
+    # Pre-index the small archived market universe by its strict identity
+    # contract: event date + unordered team codes + team-specific ticker suffix.
+    market_index: dict[tuple[str, frozenset[str], str], list[str]] = {}
+    for market in markets:
+        ticker = str(market["ticker"])
+        event_ticker = str(market["event_ticker"]).upper()
+        parts = event_ticker.split("-")
+        date_token = parts[1][:7] if len(parts) > 1 and len(parts[1]) >= 7 else ""
+        suffix = ticker.rsplit("-", 1)[-1].upper()
+        team_pair = frozenset(code for code in (
+            "ARI", "ATL", "BAL", "BOS", "CHC", "CWS", "CIN", "CLE", "COL", "DET", "HOU", "KC",
+            "LAA", "LAD", "MIA", "MIL", "MIN", "NYM", "NYY", "ATH", "PHI", "PIT", "SD", "SF",
+            "SEA", "STL", "TB", "TEX", "TOR", "WSH"
+        ) if code in event_ticker)
+        if len(team_pair) == 2 and suffix:
+            market_index.setdefault((date_token, team_pair, suffix), []).append(ticker)
     now = datetime.now(timezone.utc)
     for state in states:
         state_time = _parse_time(state["source_at"])
@@ -54,17 +69,11 @@ def build_quote_study(database: str | Path, max_quote_delay_seconds: int = 120) 
         leader_code = home_code if bool(state["leader_is_home"]) else away_code
         if not state_time or not date_token or not away_code or not home_code or not leader_code:
             continue
-        candidates = [
-            market for market in market_rows
-            if str(market["ticker"]).rsplit("-", 1)[-1].upper() == leader_code
-            and away_code in str(market["event_ticker"]).upper()
-            and home_code in str(market["event_ticker"]).upper()
-            and date_token in str(market["event_ticker"]).upper()
-        ]
+        candidates = market_index.get((date_token, frozenset({away_code, home_code}), leader_code), [])
         if len(candidates) != 1:
             missing_market += 1
             continue
-        ticker = str(candidates[0]["ticker"])
+        ticker = candidates[0]
         rows = conn.execute(
             """SELECT * FROM kalshi_historical_candles
                WHERE ticker = ? AND end_period_ts >= ? AND end_period_ts <= ?
