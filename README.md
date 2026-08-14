@@ -12,7 +12,8 @@ This repository is a **reproducible, paper-only prediction-market research proje
 | Market data | Fixed-point binary order-book normalization with executable-side depth | Implemented |
 | Paper ledger | SQLite observations, signals, paper orders, paper fills, marks, and settlements | Implemented |
 | MLB hypothesis | Records exact late-lead game states and matching Kalshi quotes | Implemented; no probability model or paper fills until calibrated |
-| Weather research | Parses the actual returned Open-Meteo ensemble members and records dynamic counts | Implemented; no market/settlement mapping or signal path |
+| Weather research | Records actual Open-Meteo members alongside explicit Weather Company station mappings for NYC and DC pilot contracts | Settlement-mapped pilot only; no probability or signal path |
+| Structural parity | Observes binary complement, directional threshold-cover, and mutually exclusive NO-basket economics against displayed depth | Prospective paper study; no candidate has cleared conservative costs |
 | Tennis research | Enforces a complete set-level score contract before a comeback rule can be studied | Disabled pending a verified score source |
 | Live trading | Production-order path | **Hard disabled** |
 
@@ -27,7 +28,7 @@ The system’s guardrails are intentional architectural restrictions, not settin
 | Safeguard | Behavior |
 |---|---|
 | Paper-only hard lock | Any mode other than `paper` is rejected. |
-| Political-market block | Markets with conservative political/election keywords are rejected. |
+| Political-market block | Markets with conservative political/election keywords and the explicit `Politics` category are rejected. |
 | Read-only API client | V11 exposes signed `GET` only. It has no HTTP mutation method. |
 | Depth-aware paper fills | The paper broker consumes only displayed opposing-book depth and can partially fill or reject a candidate. |
 | Fee accounting | Paper fills include a documented taker-fee estimate and rounding reserve. |
@@ -80,6 +81,21 @@ Inspect actual weather member counts without emitting a signal:
 python3 research/diagnose_weather.py --city dallas --kind high
 ```
 
+Run one settlement-mapped weather pilot observation (NYC and DC only; no probability or signal):
+
+```bash
+python3 research/weather_pilot.py --config config.json
+```
+
+Run a bounded structural-parity observation cycle (binary complements, threshold covers, and mutually exclusive NO baskets; all read-only):
+
+```bash
+python3 research/capture_binary_parity.py --config config.json --max-markets 100
+python3 research/capture_directional_parity.py --config config.json --max-events 50
+python3 research/capture_mec_no_basket.py --config config.json --max-events 25
+python3 research/parity_status.py --database data/research_v11.sqlite3
+```
+
 Capture sequence-checked, read-only order-book snapshots and deltas for currently live matched MLB contracts:
 
 ```bash
@@ -117,3 +133,7 @@ A future live-readiness review would require, at minimum, a full documented sett
 [3] [Open-Meteo Ensemble API](https://open-meteo.com/en/docs/ensemble-api)
 
 [4] [MLB Stats API](https://statsapi.mlb.com/)
+
+[5] [The Weather Company Kalshi Climate Data Portal](https://weather.com/kalshi)
+
+[6] [Kalshi Collateral Return](https://help.kalshi.com/en/articles/13823816-collateral-return)

@@ -109,3 +109,9 @@ References:
 [23] https://docs.kalshi.com/api-reference/events/get-event
 [24] https://help.kalshi.com/en/articles/13823816-collateral-return
 [25] https://docs.kalshi.com/api-reference/market/get-market-orderbook
+
+## Settlement-Mapped Weather Pilot — 2026-08-14
+
+- The Weather Company Kalshi Climate Data Portal publishes the listed station identifiers and reports that its values are METAR airport observations relayed through The Weather Company, refreshed every 15 minutes. It identifies New York City as `KNYC` and Washington, DC as `KDCA`. V11’s weather pilot is restricted to the explicit NYC and DC high/low series mapping and records the forecast grid point separately from the settlement station. Source: https://weather.com/kalshi.
+- The current GLOBALTEMPERATURE contract terms say the primary source is the National Weather Service hierarchy; the geographic area uses the designated official/primary measurement station unless otherwise specified, only the first official non-preliminary report is used, and contract resolution uses reported full precision rather than third-party rounding. The Open-Meteo grid ensemble therefore remains a forecast input only, not a settlement proxy. Source: https://assets.kalshi.com/contract_terms/GLOBALTEMPERATURE.pdf.
+- The V11 weather pilot persists forecast members, actual dynamic member counts, strike metadata, series/station mapping, and raw source payloads. It deliberately has no probability estimator, pricing model, paper signal, or order path until historical forecast/settlement calibration exists.
