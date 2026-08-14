@@ -253,6 +253,21 @@ class ResearchStore:
                 ),
             )
 
+    def unsettled_tickers(self) -> list[str]:
+        """Return unique candidate/fill contracts with no recorded settlement."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT ticker FROM (
+                       SELECT json_extract(payload_json, '$.ticker') AS ticker
+                       FROM observations WHERE entity_type='mlb_late_lead_candidate'
+                       UNION
+                       SELECT ticker FROM paper_fills
+                   ) WHERE ticker IS NOT NULL
+                   EXCEPT SELECT ticker FROM settlements
+                   ORDER BY ticker"""
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
     def record_settlement(self, ticker: str, result: str, stamp: SourceStamp,
                           raw: Mapping[str, Any]) -> None:
         if result not in {"yes", "no"}:

@@ -51,6 +51,15 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual(report["net_pnl"], "0.37")
             self.assertEqual(report["status"], "insufficient_data")
 
+    def test_unsettled_ticker_discovery_excludes_recorded_results(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ResearchStore(Path(directory) / "research.sqlite3")
+            store.record_observation(self.stamp, "mlb_late_lead_candidate", "candidate-1", {"ticker": "OPEN"})
+            store.record_observation(self.stamp, "mlb_late_lead_candidate", "candidate-2", {"ticker": "SETTLED"})
+            self.assertEqual(store.unsettled_tickers(), ["OPEN", "SETTLED"])
+            store.record_settlement("SETTLED", "yes", self.stamp, {"result": "yes"})
+            self.assertEqual(store.unsettled_tickers(), ["OPEN"])
+
 
 if __name__ == "__main__":
     unittest.main()
