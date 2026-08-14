@@ -18,7 +18,7 @@ class ExecutionRealismTests(unittest.TestCase):
         signal = StrategySignal(
             signal_id="s", strategy="test", strategy_version="v1", ticker="T", outcome_side="yes",
             model_probability=Decimal("0.70"), conservative_probability=Decimal("0.70"), observed_price=Decimal("0.41"),
-            requested_contracts=Decimal("1"), source_stamp=SourceStamp("test", None, datetime.now(timezone.utc), "signal"),
+            requested_contracts=Decimal("1"), source_stamp=SourceStamp("test", datetime.now(timezone.utc), None, "signal"),
             rationale="test", features={},
         )
         return PaperBroker().propose(signal)

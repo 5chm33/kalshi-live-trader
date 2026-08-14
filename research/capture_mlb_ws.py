@@ -32,10 +32,13 @@ from research.ws_book import SequenceGap, WebSocketBookSynchronizer
 LOG = logging.getLogger("kalshi_research_v11.ws")
 
 
-def _book_payload(book: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
+def _book_payload(book: Any, payload: Mapping[str, Any], game_received_at: datetime | None = None, game_source_at: datetime | None = None) -> dict[str, Any]:
     source_to_receipt_ms = None
     if book.stamp.source_at is not None:
         source_to_receipt_ms = (book.stamp.received_at - book.stamp.source_at).total_seconds() * 1000
+    game_poll_to_book_ms = None
+    if game_received_at is not None:
+        game_poll_to_book_ms = (book.stamp.received_at - game_received_at).total_seconds() * 1000
     return {
         "ticker": book.ticker,
         "yes_bids": [[str(level.price), str(level.quantity)] for level in book.yes_bids],
@@ -50,6 +53,10 @@ def _book_payload(book: Any, payload: Mapping[str, Any]) -> dict[str, Any]:
         "sid": payload.get("sid"),
         "seq": payload.get("seq"),
         "message_type": payload.get("type"),
+        "game_poll_received_at": game_received_at.isoformat() if game_received_at else None,
+        "game_source_at": game_source_at.isoformat() if game_source_at else None,
+        "game_source_event_time_available": game_source_at is not None,
+        "game_poll_to_book_ms": game_poll_to_book_ms,
     }
 
 
@@ -59,7 +66,11 @@ async def capture_once(config_file: Path, max_seconds: int, max_updates: int) ->
     store = ResearchStore(config.database_path)
     games = MLBFeed().live_games()
     markets = [item for item in client.markets("KXMLBGAME").get("markets", []) if isinstance(item, Mapping)]
-    tickers = sorted({mapping.ticker for game in games for mapping in match_game_markets(game, markets)})
+    ticker_game_stamps: dict[str, tuple[datetime, datetime | None]] = {}
+    for game in games:
+        for mapping in match_game_markets(game, markets):
+            ticker_game_stamps.setdefault(mapping.ticker, (game.stamp.received_at, game.stamp.source_at))
+    tickers = sorted(ticker_game_stamps)
     summary: dict[str, Any] = {"mode": "paper_only_no_orders", "live_games": len(games), "matched_tickers": len(tickers), "book_updates": 0, "sequence_gaps": 0, "ticker_coverage": {ticker: 0 for ticker in tickers}}
     if not tickers:
         return summary
@@ -82,11 +93,12 @@ async def capture_once(config_file: Path, max_seconds: int, max_updates: int) ->
         if book is None:
             continue
         stream.health.message(book.stamp.source_at, book.stamp.received_at)
-        store.record_observation(book.stamp, "kalshi_ws_orderbook", book.ticker, _book_payload(book, payload))
+        game_received_at, game_source_at = ticker_game_stamps.get(book.ticker, (None, None))
+        store.record_observation(book.stamp, "kalshi_ws_orderbook", book.ticker, _book_payload(book, payload, game_received_at, game_source_at))
         summary["book_updates"] += 1
         summary["ticker_coverage"][book.ticker] = int(summary["ticker_coverage"].get(book.ticker, 0)) + 1
     summary.update(stream.health.payload())
-    health_stamp = SourceStamp("kalshi_ws_health", None, datetime.now(timezone.utc), payload_hash(summary))
+    health_stamp = SourceStamp("kalshi_ws_health", datetime.now(timezone.utc), None, payload_hash(summary))
     store.record_observation(health_stamp, "kalshi_ws_health", "mlb_capture_cycle", summary)
     return summary
 
