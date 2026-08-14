@@ -59,10 +59,13 @@ class StrategyContractTests(unittest.TestCase):
         book = parse_orderbook("KXMLBGAME-TESTNYYTOR-NYY", {
             "orderbook_fp": {"yes_dollars": [["0.60", "2"]], "no_dollars": [["0.35", "2"]]}
         }, self.stamp)
-        candidate = MLBLateLeadDetector().detect(game, mapping, book)
+        detector = MLBLateLeadDetector()
+        candidate = detector.detect(game, mapping, book)
+        duplicate = detector.detect(game, mapping, book)
         self.assertIsNotNone(candidate)
-        assert candidate is not None
-        self.assertIsNone(MLBLateLeadDetector().to_signal(candidate, NoProbabilityModel(), Decimal("1")))
+        assert candidate is not None and duplicate is not None
+        self.assertEqual(candidate.candidate_id, duplicate.candidate_id)
+        self.assertIsNone(detector.to_signal(candidate, NoProbabilityModel(), Decimal("1")))
 
     def test_weather_parser_counts_actual_members_by_model(self) -> None:
         payload = {

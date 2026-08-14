@@ -73,7 +73,16 @@ def run_once(config_file: Path) -> dict[str, int]:
             if candidate is None:
                 continue
             counters["candidates"] += 1
-            store.record_observation(game.stamp, "mlb_late_lead_candidate", candidate.candidate_id, candidate.to_features())
+            candidate_features = candidate.to_features()
+            candidate_stamp = SourceStamp(
+                source="derived_mlb_candidate",
+                source_at=game.stamp.source_at,
+                received_at=datetime.now(timezone.utc),
+                payload_sha256=payload_hash(candidate_features),
+            )
+            store.record_observation(
+                candidate_stamp, "mlb_late_lead_candidate", candidate.candidate_id, candidate_features
+            )
 
             # This returns None until a separately fitted/calibrated model is
             # explicitly provided. It prevents a heuristic from becoming a fill.

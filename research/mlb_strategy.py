@@ -7,10 +7,10 @@ before it can emit a paper order candidate.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from decimal import Decimal
+from hashlib import sha256
 from typing import Protocol
-from uuid import uuid4
 
 from research.models import CanonicalBook, GameState, MarketMapping, StrategySignal
 
@@ -80,8 +80,12 @@ class MLBLateLeadDetector:
             return None
         if mapping.ticker != book.ticker or book.best_yes_ask is None:
             return None
+        identity = "|".join((
+            game.source_game_id, mapping.ticker, leader, str(game.away_runs),
+            str(game.home_runs), str(game.inning), str(game.inning_half or ""),
+        ))
         return MLBLateLeadCandidate(
-            candidate_id=f"mlb-state-{uuid4()}",
+            candidate_id=f"mlb-state-{sha256(identity.encode('utf-8')).hexdigest()[:24]}",
             game_id=game.source_game_id,
             ticker=mapping.ticker,
             leader=leader,
@@ -104,7 +108,11 @@ class MLBLateLeadDetector:
         if probability is None:
             return None
         return StrategySignal(
-            signal_id=f"signal-{uuid4()}",
+            signal_id=(
+                "signal-" + sha256(
+                    f"{candidate.candidate_id}|{self.version}|{model.version}".encode("utf-8")
+                ).hexdigest()[:24]
+            ),
             strategy="mlb_late_lead",
             strategy_version=f"{self.version}+{model.version}",
             ticker=candidate.ticker,
