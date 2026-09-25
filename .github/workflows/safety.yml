@@ -20,4 +20,4 @@ jobs:
       - name: Run offline tests
         run: python audit_integration.py
       - name: Compile source
-        run: python -m compileall -q core strategies main.py account_preflight.py account_performance.py tests
+        run: python -m compileall -q core strategies main.py account_preflight.py account_performance.py position_watch.py shadow_performance.py reconcile_journal.py tests scripts

@@ -73,6 +73,8 @@ def inspect(client: KalshiClient) -> dict:
     return {"checked_at": datetime.now(timezone.utc).isoformat(),
             **balance, "open_position_count": len(signed),
             "resting_order_count": len(orders), "recent_fill_count": len(fills),
+            "position_subaccount": 0,
+            "note_on_scope": "Positions are primary subaccount 0; other account GETs may cover a broader scope.",
             "position_sizes": signed,
             "trading_enabled": False,
             "note": "Read-only verification; these counts do not validate strategy or profitability."}

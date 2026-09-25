@@ -1,19 +1,9 @@
-"""
-Latency Sniper Strategy — v10
-==============================
-The primary profit engine. Exploits the time gap between ESPN score
-updates and Kalshi price adjustments.
+"""Legacy, uncalibrated MLB shadow heuristic; no order execution.
 
-How it works:
-1. ESPN reports a score change (e.g., Team A scores a run)
-2. We immediately calculate the new fair value based on game state
-3. If Kalshi's price hasn't moved yet (stale), we buy at the old price
-4. When market makers reprice (usually 5-30 seconds later), we profit
-
-This is the same strategy used by HFT firms in traditional markets:
-faster information → trade before the market adjusts → profit.
-
-Win probability tables from Fangraphs/Baseball Reference/ATP stats.
+The lookup below has no reproducible provenance, validation dataset,
+out-of-sample calibration, or demonstrated timing advantage over the market.
+The observer uses it only to *log* hypothetical candidates. It MUST NOT be
+treated as an estimated fair value for real-money trading or a profit engine.
 """
 
 import time
@@ -24,8 +14,7 @@ from dataclasses import dataclass
 log = logging.getLogger('KALSHI')
 
 
-# ── Baseball Win Probability by (lead, inning) ──────────────────────────────
-# Source: Fangraphs Win Expectancy tables (2015-2024 data)
+# ── Unverified illustrative probability lookup by (lead, inning) ─────────────
 MLB_WIN_PROB = {
     # (abs_lead, inning) -> probability leader wins
     (1, 1): 0.56, (1, 2): 0.58, (1, 3): 0.60, (1, 4): 0.63,
@@ -67,7 +56,7 @@ class SniperSignal:
 
 
 class LatencySniper:
-    """Detects and trades stale prices after score changes."""
+    """Detects illustrative shadow candidates after observed score changes."""
 
     def __init__(self, config: dict = None):
         cfg = config or {}
@@ -91,7 +80,7 @@ class LatencySniper:
         """
         gid = matched_game.game_id
 
-        # Strategy 1: Post-score-change sniping (HIGHEST PRIORITY)
+        # Shadow condition 1: score change; neither feed timing nor edge verified.
         if gid in self._recent_changes and gid not in self._traded:
             change, change_time = self._recent_changes[gid]
             age = time.time() - change_time
@@ -99,7 +88,6 @@ class LatencySniper:
             if age < self.stale_window:
                 signal = self._evaluate_score_change(matched_game, change)
                 if signal:
-                    self._traded.add(gid)
                     return signal
 
         # Strategy 2: Late-game value (slower edge, always active)
@@ -164,7 +152,7 @@ class LatencySniper:
         reason = (f"SNIPE: {game.leader} leads {lead}-0 in inning {inning}. "
                   f"Fair: {fair_value:.0%}, Market: {ask_price:.0%}, Edge: {edge:.0%}")
 
-        log.info(f"[SNIPER] ⚡ {reason}")
+        log.info(f"[SHADOW] {reason}")
 
         return SniperSignal(
             ticker=market.ticker,
@@ -225,9 +213,7 @@ class LatencySniper:
         reason = (f"LATE LEAD: {game.leader} +{lead} in inning {inning}. "
                   f"Fair: {fair_value:.0%}, Market: {ask_price:.0%}, Edge: {edge:.0%}")
 
-        log.info(f"[SNIPER] 🎯 {reason}")
-
-        self._traded.add(game.game_id)
+        log.info(f"[SHADOW] {reason}")
 
         return SniperSignal(
             ticker=market.ticker,
@@ -240,6 +226,10 @@ class LatencySniper:
             sport=game.sport,
             urgency='medium',  # Limit order OK for slower edge
         )
+
+    def mark_observed(self, game_id: str) -> None:
+        """Deduplicate only after a depth-qualified candidate is actually logged."""
+        self._traded.add(game_id)
 
     def cleanup(self):
         """Remove old score changes (>5 min old)."""

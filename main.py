@@ -101,6 +101,8 @@ def observe_cycle(feed: ESPNFeed, matcher: MarketMatcher, client: PublicMarketCl
             continue
         market_key = "a" if signal.ticker == updated.market_a.ticker else "b"
         quote = fresh[market_key][1]
+        if quote.yes_ask_size < 1 or quote.no_ask_size < 1:
+            continue
         entry = quote.yes_ask
         exit_bid = quote.yes_bid
         entry_fee = estimated_taker_fee(entry)
@@ -117,6 +119,7 @@ def observe_cycle(feed: ESPNFeed, matcher: MarketMatcher, client: PublicMarketCl
             "estimated_immediate_roundtrip_pnl_per_contract": str(
                 exit_bid - entry - entry_fee - exit_fee),
             "note": "No order sent; fill and future win/loss are unobserved."}) + "\n")
+        strategy.mark_observed(game.game_id)
     strategy.cleanup()
     result = {"type": "cycle", "observed_at": timestamp(), **counters}
     output.write(json.dumps(result) + "\n")

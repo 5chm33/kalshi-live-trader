@@ -107,6 +107,7 @@ class PortfolioTests(unittest.TestCase):
             {"market_positions": [{"ticker": "B", "position_fp": "-2"}], "cursor": ""}])
         self.assertEqual(len(client.get_positions()), 2)
         self.assertIn("cursor=next", client._request.call_args_list[-1].args[1])
+        self.assertIn("subaccount=0", client._request.call_args_list[-1].args[1])
 
 
 class MarketPaginationTests(unittest.TestCase):
@@ -186,6 +187,26 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue().splitlines()[-2])["best_ask"], "0.5100")
         client.place_order.assert_not_called()
         client.place_ioc.assert_not_called()
+
+    def test_shadow_candidate_requires_entry_and_exit_depth(self):
+        game = GameState(sport="mlb", game_id="g", team_a="BAL", team_b="NYY",
+                         team_a_full="Orioles", team_b_full="Yankees", score_a=3,
+                         score_b=0, state="in", period=7,
+                         event_time="2026-09-25T20:05:00Z")
+        feed = Mock()
+        feed.poll.return_value = ([game], [])
+        client = Mock()
+        client.get_markets.return_value = [market("BAL"), market("NYY")]
+        client.get_orderbook.return_value = {"yes_dollars": [["0.45", "9"]],
+                                             "no_dollars": [["0.49", "0.5"]]}
+        matcher = MarketMatcher(client)
+        strategy = LatencySniper()
+        result = observe_cycle(feed, matcher, client, strategy, io.StringIO())
+        self.assertEqual(result['strict_matches'], 1)
+        self.assertEqual(result['heuristic_candidates'], 0)
+        client.get_orderbook.return_value = book()
+        second = observe_cycle(feed, matcher, client, strategy, io.StringIO())
+        self.assertEqual(second['heuristic_candidates'], 1)
 
 
 if __name__ == "__main__":
