@@ -22,8 +22,8 @@ from cryptography.hazmat.backends import default_backend
 
 log = logging.getLogger('KALSHI')
 
-BASE_URL = "https://api.elections.kalshi.com"
-WS_URL = "wss://api.elections.kalshi.com/trade-api/ws/v2"
+BASE_URL = "https://external-api.kalshi.com"
+WS_URL = "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
 
 
 class KalshiClient:
@@ -36,7 +36,7 @@ class KalshiClient:
         self.session.headers.update({'Content-Type': 'application/json'})
         self.private_key = None
         self._last_req = 0.0
-        self._min_interval = 0.05  # 20 req/sec (well under 30/sec limit)
+        self._min_interval = 0.05  # conservative client pacing; tier budgets are token-based
 
         # Load RSA key
         pem = None
@@ -95,7 +95,8 @@ class KalshiClient:
             try:
                 hdrs = self._auth_headers(method, path)
                 if method == 'GET':
-                    r = self.session.get(url, headers=hdrs, timeout=timeout)
+                    r = self.session.get(url, headers=hdrs, timeout=timeout,
+                                         allow_redirects=False)
                 elif method == 'POST':
                     r = self.session.post(url, headers=hdrs,
                                           data=json.dumps(body or {}), timeout=timeout)
@@ -135,6 +136,28 @@ class KalshiClient:
             return True
         log.error("[API] Auth FAILED")
         return False
+
+    def get_api_limits(self) -> dict:
+        """Validate the effective token tier; never infer limits from user claims."""
+        data = self._request('GET', '/account/limits')
+        if not isinstance(data, dict):
+            raise RuntimeError('Cannot verify Kalshi API usage tier')
+        tier = data.get('usage_tier')
+        if tier not in {'basic', 'advanced', 'expert', 'premier', 'paragon', 'prime', 'prestige'}:
+            raise RuntimeError('Unknown Kalshi API usage tier')
+        buckets = {}
+        for kind in ('read', 'write'):
+            value = data.get(kind)
+            if not isinstance(value, dict):
+                raise RuntimeError(f'Cannot verify {kind} token bucket')
+            refill, capacity = value.get('refill_rate'), value.get('bucket_capacity')
+            if (isinstance(refill, bool) or isinstance(capacity, bool) or
+                    not isinstance(refill, (int, float)) or
+                    not isinstance(capacity, (int, float)) or
+                    not 0 < refill <= capacity < 1000000):
+                raise RuntimeError(f'Invalid {kind} token bucket')
+            buckets[kind] = {'refill_rate': refill, 'bucket_capacity': capacity}
+        return {'usage_tier': tier, 'read': buckets['read'], 'write': buckets['write']}
 
     # ── Balance ───────────────────────────────────────────────────────────
 

@@ -100,6 +100,13 @@ class PortfolioTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Cannot verify"):
             client.get_portfolio_value()
 
+    def test_signed_get_refuses_redirects(self):
+        client = KalshiClient({})
+        client._auth_headers = Mock(return_value={'KALSHI-ACCESS-KEY': 'test'})
+        client.session.get = Mock(return_value=Mock(status_code=302, text='redirect'))
+        self.assertIsNone(client._request('GET', '/account/limits', retries=1))
+        self.assertFalse(client.session.get.call_args.kwargs['allow_redirects'])
+
     def test_positions_read_all_pages(self):
         client = KalshiClient({})
         client._request = Mock(side_effect=[
@@ -113,13 +120,21 @@ class PortfolioTests(unittest.TestCase):
 class MarketPaginationTests(unittest.TestCase):
     def test_missing_page_fails_instead_of_returning_partial_data(self):
         session = Mock()
-        first = Mock()
+        first = Mock(status_code=200)
         first.json.return_value = {"markets": [{"ticker": "A"}], "cursor": "next"}
-        broken = Mock()
+        broken = Mock(status_code=200)
         broken.json.return_value = {"error": "failure"}
         session.get.side_effect = [first, broken]
         with self.assertRaises(MarketDataError):
             PublicMarketClient(session).get_markets("KXMLBGAME")
+        self.assertFalse(session.get.call_args.kwargs['allow_redirects'])
+
+    def test_market_redirect_cannot_be_followed(self):
+        session = Mock()
+        session.get.return_value = Mock(status_code=302)
+        with self.assertRaisesRegex(MarketDataError, 'redirect'):
+            PublicMarketClient(session).get_markets('KXMLBGAME')
+        self.assertFalse(session.get.call_args.kwargs['allow_redirects'])
 
 
 class ESPNTests(unittest.TestCase):

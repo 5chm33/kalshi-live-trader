@@ -22,6 +22,21 @@ def parse_time(value: str) -> datetime:
     return stamp
 
 
+def wilson95(wins: int, sample: int) -> list[str] | None:
+    """Approximate binomial interval; meaningful only for independent samples."""
+    if not sample:
+        return None
+    if not 0 <= wins <= sample:
+        raise ValueError('Invalid positive count')
+    n, z = Decimal(sample), Decimal('1.959963984')
+    p = Decimal(wins) / n
+    z2 = z * z
+    center = (p + z2 / (2*n)) / (1 + z2/n)
+    margin = z * (p*(1-p)/n + z2/(4*n*n)).sqrt() / (1 + z2/n)
+    return [str(max(Decimal(0), center-margin).quantize(Decimal('0.0001'))),
+            str(min(Decimal(1), center+margin).quantize(Decimal('0.0001')))]
+
+
 def evaluate(records: list[dict], *, min_hold_seconds: int = 60,
              max_hold_seconds: int = 300) -> dict:
     if not 0 <= min_hold_seconds < max_hold_seconds <= 1800:
@@ -36,6 +51,11 @@ def evaluate(records: list[dict], *, min_hold_seconds: int = 60,
             candidates.append(row)
         elif kind == 'cycle_error':
             raise ValueError('Observation journal contains a data error; do not score an incomplete run')
+        elif kind == 'monitor_cycle' and (row.get('source_error') or
+                                          not row.get('espn_ok') or not row.get('kalshi_ok')):
+            raise ValueError('30-minute observation has a source error; rate is undefined')
+        elif kind == 'monitor_end' and row.get('totals', {}).get('source_errors', 0):
+            raise ValueError('30-minute observation ended with source errors; rate is undefined')
     for quotes in by_ticker.values():
         quotes.sort(key=lambda q: parse_time(q['observed_at']))
     evaluated = []
@@ -84,14 +104,15 @@ def evaluate(records: list[dict], *, min_hold_seconds: int = 60,
             break
         evaluated.append(observed)
     priced = [row for row in evaluated if row['status'] == 'observed_hypothetical']
+    positive = sum(row['profitable_if_both_filled'] for row in priced)
     return {'candidate_count': len(candidates), 'priced_exit_count': len(priced),
             'unresolved_count': len(candidates) - len(priced),
-            'positive_hypothetical_outcomes': sum(row['profitable_if_both_filled'] for row in priced),
+            'positive_hypothetical_outcomes': positive,
             'sum_estimated_net_one_contract_dollars': str(sum(
                 (Decimal(row['net_per_contract_est']) for row in priced), Decimal(0))) if priced else None,
-            'hypothetical_positive_rate': (str(Decimal(sum(row['profitable_if_both_filled'] for row in priced)) /
-                                               Decimal(len(priced))) if priced else None),
-            'note': 'Not bot fills, not actual win rate, not a settlement or executable guarantee.',
+            'hypothetical_positive_rate': (str(Decimal(positive) / Decimal(len(priced))) if priced else None),
+            'approx_wilson95_if_independent': wilson95(positive, len(priced)),
+            'note': 'Hypothetical, not bot fills. Interval assumes independent observed exits and ignores fill uncertainty; neither is assured.',
             'rows': evaluated}
 
 

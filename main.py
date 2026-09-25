@@ -34,8 +34,9 @@ def timestamp() -> str:
 
 
 def observe_cycle(feed: ESPNFeed, matcher: MarketMatcher, client: PublicMarketClient,
-                  strategy: LatencySniper, output) -> dict:
-    games, changes = feed.poll()
+                  strategy: LatencySniper, output, *,
+                  observed: tuple | None = None) -> dict:
+    games, changes = observed if observed is not None else feed.poll()
     for change in changes:
         strategy.on_score_change(change)
     matched = matcher.match_games(games)

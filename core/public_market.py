@@ -7,7 +7,7 @@ from typing import Optional
 
 import requests
 
-BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
+BASE_URL = "https://external-api.kalshi.com/trade-api/v2"
 
 
 class MarketDataError(RuntimeError):
@@ -81,8 +81,11 @@ class PublicMarketClient:
         self.session = session or requests.Session()
 
     def _get(self, path: str, params: dict | None = None) -> dict:
-        response = self.session.get(BASE_URL + path, params=params, timeout=12)
+        response = self.session.get(BASE_URL + path, params=params, timeout=12,
+                                    allow_redirects=False)
         response.raise_for_status()
+        if 300 <= response.status_code < 400:
+            raise MarketDataError('Unexpected Kalshi API redirect')
         payload = response.json()
         if not isinstance(payload, dict):
             raise MarketDataError("Non-object Kalshi response")

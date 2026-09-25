@@ -12,6 +12,8 @@ python3 main.py --cycles 6 --interval 10 --output logs/shadow_observations.jsonl
 
 Output is append-only JSON Lines (ignored by Git). It records current ESPN MLB games, strict same-time Kalshi market matches, actual executable orderbook quotes and available depth, detected score changes, and **uncalibrated hypothetical** MLB heuristic candidates. When no live game has a matching market, it records a public quote from an unrelated market to verify both market discovery and book connectivity, but does not treat it as a trade. A `cycle_error` aborts on feed or market-data failure. Use `--cycles 1` for a one-shot check; allowed range is 1–180 scans and minimum interval is 10 seconds.
 
+For a **30-minute wall-clock observation** that records source failures rather than stopping on the first outage, run `python3 observe_30m.py --duration-seconds 1800 --interval-seconds 10 --output logs/monitor_30m.jsonl`. It writes a private JSONL journal with `monitor_start`, per-cycle health/source errors, and `monitor_end`. If either feed fails, the resulting win rate is **undefined**; the watcher does not fake quotes, disable TLS verification, or submit an order. The normal observer and account client now use Kalshi's current documented `external-api.kalshi.com` host. A TLS hostname/expiry error at that host is an environmental connectivity failure to fix, not permission to use `verify=False`.
+
 ## Optional private account diagnostics (GET-only)
 
 If you own a Kalshi key, store its key ID and PEM in a local **untracked** `config.json` with mode `0600`; never put credentials in a GitHub PR, issue, chat message, CI secret on a public fork, or read-only observation log. The following commands authenticate only to read balance, **primary-subaccount open positions**, resting orders, and recent fills; the performance check reads live and historical market positions. Do not infer other subaccounts are flat from this report:
@@ -20,6 +22,7 @@ If you own a Kalshi key, store its key ID and PEM in a local **untracked** `conf
 chmod 600 config.json
 python3 account_preflight.py --config config.json --output logs/account_preflight.json
 python3 account_performance.py --config config.json --output logs/account_performance.json
+python3 account_limits.py --config config.json --output logs/account_limits.json
 ```
 
 Both reports are local private files under the Git-ignored `logs/` directory. `balance_dollars` is available **cash**; the API's `portfolio_value` is separately reported as `position_mark_dollars` (not treated as total cash plus positions). Historical per-market realized P&L can include **unrelated manual trades** and is not an attribution to this bot or proof of future profitability. Account read errors abort, rather than implying zero positions or a zero balance. Uploaded older bundles may contain plaintext credentials; never extract or commit their `config.json` into this repository.
@@ -44,6 +47,8 @@ The GET-only recovery worker `python3 reconcile_journal.py --config config.json 
 - Position GET failures are not treated as an empty portfolio; portfolio positions are paginated. **This does not mean live reconciliation is complete.**
 - Authenticated POST/DELETE writes are blocked at the HTTP client boundary. There is no continuous service in this temporary sandbox; an observer only runs for its configured number of scans.
 - New, **unconnected** execution primitives (`core/order_math.py`, `core/execution_ledger.py`, `core/position_valuation.py`) cover V2 YES/NO quote conversion, zero-bet-if-no-edge sizing, exclusive crash-persistent order journaling, order-status GET recovery, partial-fill/exit ownership, and actual-fill accounting with a fresh-book exit estimate. These are regression-tested components, **not an activated execution loop**. The existing position is user-owned and must never be silently assigned to bot-owned inventory.
+- Local risk limits are separate from API usage tiers: the journal now caps new entry submission attempts at **three per UTC day** by default, while preserving the ability to submit a verified exit. Kalshi's [official rate-limit documentation](https://docs.kalshi.com/getting_started/rate_limits) specifies finite **Advanced** token buckets (300 read and 300 write tokens/second, with endpoint-specific costs), not unlimited trades or a guarantee of profitable fills. The account's effective tier could not be re-queried while the sandbox's Kalshi TLS validation failed.
+- Signed GETs now refuse cross-host redirects, which otherwise might forward signed headers. The limits command will report the **effective** tier and token refill only when Kalshi's certificate validates; it never grants permission to bypass the independent three-entry local safety cap.
 
 ## Still blocked before real-money orders
 

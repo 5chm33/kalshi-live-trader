@@ -23,6 +23,7 @@ class ShadowTests(unittest.TestCase):
         result = evaluate([quote()])
         self.assertEqual(result['candidate_count'], 0)
         self.assertIsNone(result['hypothetical_positive_rate'])
+        self.assertIsNone(result['approx_wilson95_if_independent'])
         self.assertIsNone(result['sum_estimated_net_one_contract_dollars'])
 
     def test_insufficient_depth_and_missing_exit_remain_unresolved(self):
@@ -42,12 +43,17 @@ class ShadowTests(unittest.TestCase):
         self.assertEqual(result['priced_exit_count'], 1)
         self.assertEqual(result['positive_hypothetical_outcomes'], 1)
         self.assertEqual(result['hypothetical_positive_rate'], '1')
+        self.assertLess(float(result['approx_wilson95_if_independent'][0]), 0.3)
         self.assertEqual(result['rows'][0]['status'], 'observed_hypothetical')
         self.assertEqual(result['rows'][0]['net_per_contract_est'], '0.02')
 
     def test_data_error_aborts_instead_of_fabricating_success(self):
         with self.assertRaisesRegex(ValueError, 'data error'):
             evaluate([candidate(), {"type": "cycle_error"}, quote()])
+        with self.assertRaisesRegex(ValueError, 'source error'):
+            evaluate([candidate(), {"type": "monitor_cycle", "espn_ok": True,
+                                    "kalshi_ok": False, "source_error": "certificate invalid"},
+                      quote()])
 
     def test_overlapping_signals_do_not_reuse_one_contract_of_exit_depth(self):
         second = candidate()

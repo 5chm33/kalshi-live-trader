@@ -22,7 +22,12 @@ class LedgerError(RuntimeError):
 
 
 class OrderLedger:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, max_entry_attempts_per_day: int = 3):
+        if (isinstance(max_entry_attempts_per_day, bool) or
+                not isinstance(max_entry_attempts_per_day, int) or
+                not 1 <= max_entry_attempts_per_day <= 100):
+            raise ValueError('Invalid daily entry-attempt cap')
+        self.max_entry_attempts_per_day = max_entry_attempts_per_day
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_symlink() or (path.exists() and stat.S_IMODE(path.stat().st_mode) & 0o077):
@@ -49,6 +54,8 @@ class OrderLedger:
             exchange_fill_count TEXT, exchange_remaining TEXT, exchange_status TEXT,
             error TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )""")
+        if 'submitted_at' not in {r['name'] for r in self.db.execute('PRAGMA table_info(intents)')}:
+            self.db.execute('ALTER TABLE intents ADD COLUMN submitted_at TEXT')
         self.db.execute("""CREATE TABLE IF NOT EXISTS fills (
             fill_id TEXT PRIMARY KEY, client_id TEXT NOT NULL,
             order_id TEXT NOT NULL, count TEXT NOT NULL,
@@ -129,9 +136,17 @@ class OrderLedger:
             raise LedgerError("Duplicate client ID") from exc
 
     def begin_submit(self, client_id: str) -> None:
-        if self._row(client_id)["phase"] != "prepared":
+        row = self._row(client_id)
+        if row["phase"] != "prepared":
             raise LedgerError("Cannot submit an already-submitted intent")
-        self.db.execute("UPDATE intents SET phase='submitting' WHERE client_id=?", (client_id,))
+        if row['action'] == 'buy':
+            attempted = self.db.execute("""SELECT COUNT(*) FROM intents
+                WHERE action='buy' AND submitted_at >= date('now')
+                AND submitted_at < datetime(date('now'), '+1 day')""").fetchone()[0]
+            if attempted >= self.max_entry_attempts_per_day:
+                raise LedgerError('Daily new-entry attempt cap reached')
+        self.db.execute("""UPDATE intents SET phase='submitting', submitted_at=datetime('now')
+            WHERE client_id=?""", (client_id,))
 
     def abandon_prepared(self, client_id: str) -> None:
         """Clear only a persisted intent for which no submission began."""

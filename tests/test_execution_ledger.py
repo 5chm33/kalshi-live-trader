@@ -80,6 +80,34 @@ class LedgerTests(unittest.TestCase):
         with self.assertRaises(LedgerError):
             self.ledger.abandon_prepared("two")
 
+    def test_daily_attempt_cap_counts_post_only_not_prepared_and_leaves_exit_possible(self):
+        for i in range(3):
+            cid = f'entry-{i}'
+            self.ledger.prepare(cid, 'KX-TEST', self.item)
+            self.ledger.begin_submit(cid)
+            self.ledger.record_ack(cid, {'client_order_id': cid,
+                'order_id': 'exchange-' + cid, 'fill_count': '0', 'remaining_count': '0'})
+            self.terminal(cid, 'KX-TEST', 'bid', 2, 0, 'canceled')
+            self.ledger.record_verified_flat(cid, order_terminal=True,
+                                             exchange_position_size=D('0'))
+        self.ledger.prepare('fourth', 'KX-TEST', self.item)
+        with self.assertRaisesRegex(LedgerError, 'Daily new-entry attempt cap'):
+            self.ledger.begin_submit('fourth')
+        self.assertEqual(self.ledger.snapshot('fourth')['phase'], 'prepared')
+        self.ledger.abandon_prepared('fourth')
+        # The cap is defined by exchange-attempt time, not creation time.
+        self.ledger.db.execute("UPDATE intents SET submitted_at=datetime('now','-1 day')")
+        self.ledger.prepare('tomorrow', 'KX-TEST', self.item)
+        self.ledger.begin_submit('tomorrow')
+        self.ledger.record_ack('tomorrow', {'client_order_id': 'tomorrow',
+            'order_id': 'exchange-tomorrow', 'fill_count': '1', 'remaining_count': '0'})
+        self.fill('tomorrow', 'tomorrow-fill')
+        self.terminal('tomorrow', 'KX-TEST', 'bid', 2, 1, 'canceled')
+        self.ledger.prepare('safe-exit', 'KX-TEST', plan('yes', 'sell', 1, D('0.33')),
+                            verified_position_size=D('1'))
+        self.ledger.begin_submit('safe-exit')
+        self.assertEqual(self.ledger.snapshot('safe-exit')['phase'], 'submitting')
+
     def test_timeout_can_attach_only_to_validated_venue_order(self):
         self.ledger.prepare('one', 'KX-TEST', self.item)
         self.ledger.begin_submit('one')
