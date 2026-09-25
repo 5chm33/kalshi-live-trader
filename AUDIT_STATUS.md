@@ -1,63 +1,58 @@
-# Implementation Audit — 2026-08-13
+# Implementation Audit — 2026-09-25
 
-**Status: research prototype; not validated as profitable and not safe to run unattended with real capital.**
+**Status: read-only research build. Live order submission is disabled; no profitability or win rate has been established.**
 
-This report was added before making the repository public so that reviewers can distinguish implemented behavior from planned architecture and marketing language. It records read-only checks run against the checked-in commit.
+The former `main.py` placed orders directly from uncalibrated heuristics. Its existing August audit correctly identified several blockers; this update records what was verified and changed. The original source remains in Git history. No credentials are present in this working environment and no authenticated account, balance, positions, or fills were inspected.
 
-## Scope and security review
+## Critical findings
 
-The initial public-history review found one commit (`e01e56c`) and 13 tracked source/documentation files. `config.json`, private-key files, and logs are excluded by `.gitignore` and are not present in the Git history. The repository is therefore suitable for public source-code review **as of this audit**. No API credential should ever be committed.
+| Severity | Finding | Status |
+| --- | --- | --- |
+| Critical | V2 `ask` is **sell YES at a YES price**; code treated it as buy NO at a NO price. The old NO exit had the same price-unit error. | **Blocked**, not trusted or reused. V2 source remains for inspection, but all POST/DELETE requests now raise before network access. |
+| Critical | Exit logic removed a local position even if IOC filled zero, partially filled, failed, or the fallback merely placed a resting order; restarts lost state. | **Unresolved**; old position manager not invoked by `main.py`. No live trading until exchange-state reconciliation and exits are rebuilt/tested. |
+| Critical | `get_positions()` returned `[]` on API error, confusing unknown holdings with flat exposure. | **Improved**: read failure raises; paginated results are collected. End-to-end authenticated portfolio verification remains untested without credentials. |
+| High | Old win rate counted a winning partial exit as a full trade, divided by all entered trades including open ones, ignored fees, and printed cash change as P&L. | **Unresolved in legacy module; not computed** by read-only observer. |
+| High | The old matcher could select a same-team market on a different day, because it ignored ESPN/Kalshi scheduled event times. | **Improved**: exact MLB suffix + both teams under one event + <=4h scheduled-time difference; missing date refuses match. |
+| High | The market-list quote is not necessarily executable or recent; no depth/slippage check or fee-adjusted expected return. | **Improved for observation**: fetch a fresh book, derive ask from opposing best bid, validate liquidity, and log bid/ask and estimated fees. No claim of achievable fills. |
+| High | Weather scan used incompatible keyword arguments; invalid target date substituted tomorrow, UKMO was omitted from probabilities, and NWS comparison ignored target date. | **Isolated**: weather not traded; date substitution removed, UKMO included, NWS date checked, Gaussian fallback removed. Weather strategy and settlement semantics still unvalidated. |
+| High | ESPN score polling every 10 seconds cannot establish an information-latency advantage; model fair values for MLB/tennis/weather have no calibrated out-of-sample evidence. | **Unresolved**; observer logs heuristic candidates only. No live or paper win rate inferred. |
 
-> A GitHub personal-access token was used during repository creation and has appeared outside the repository. The account owner should revoke it and issue a replacement before using GitHub automation again.
-
-| Check | Result | Evidence |
-|---|---|---|
-| `config.json` tracked | No | `git ls-files` / history scan |
-| PEM/private-key material tracked | No | `git grep` / history scan |
-| Token-like GitHub credential tracked | No | `git grep` / history scan |
-| Full Python syntax compilation | Pass | `python -m py_compile` on all tracked `.py` files |
-| Runtime/integration audit | Fail | `audit_integration.py` identified blocking integration defects |
-| Live weather read-only check | Completed | `audit_weather_live.py` returned 173 usable members, not 209 |
-
-## Verified implementation versus claim
-
-| Area | What is actually implemented | Audit conclusion |
-|---|---|---|
-| Live sports latency | REST polling through ESPN every 10 seconds; a score-change detector; MLB late-lead logic | **Not HFT and not WebSocket-driven.** `WS_URL` and auth-header helpers exist, but there is no active WebSocket client/subscription loop. |
-| Sports coverage | `ESPNFeed` can poll several sports, but `LatencySniper.evaluate()` routes non-MLB events to no signal | **Active sniper is MLB-only.** The banner/README should not imply deployed NBA, ATP, or WTA latency-sniping logic. |
-| Weather models | Requested Open-Meteo models include ECMWF IFS, ECMWF AIFS, GFS, ICON, and UKMO | **The “209 independent members” claim is unverified and currently false in live test.** The read-only test returned 102 ECMWF+AIFS + 31 GFS + 40 ICON = 173 members. UKMO was not returned/used in the probability path. |
-| Weather integration | `main.py` invokes `EnsembleWeatherEngine.analyze_market()` using `ticker=` and `market_type=` keywords | **Blocking bug.** The engine signature expects `market_ticker`, `market_title`, and `market_yes_price`; weather signals cannot execute through the checked-in main loop. |
-| Tennis volatility | ESPN rankings are fetched and coarse ranking-gap probability tables are used | **Does not implement the claimed first-set-loss condition.** The ESPN game object does not provide set-by-set state to the strategy; it only checks the aggregate leader. |
-| Position management | In-memory positions, limits, trailing-stop logic, and order submission calls | **Not restart-safe.** Existing Kalshi positions are not loaded at startup and state is discarded on restart. P&L does not include fees or reconcile fills/positions from the API. |
-| Profitability | No out-of-sample backtest, fee-adjusted expectancy study, or live performance attribution exists in the repository | **No basis to claim profitability.** Any stated fair values are heuristic tables, not calibrated estimates. |
-
-## Blocking defects to fix before real-money operation
-
-1. **Repair the weather call interface.** Refactor `main.py::_scan_weather()` to call the checked-in engine’s real `analyze_market(market_ticker, market_title, market_yes_price, floor_strike, cap_strike)` signature, then add a test that verifies a weather opportunity can travel from API response to an order decision.
-2. **Eliminate overstatements.** Do not label the project “HFT,” “full SOTA,” or “209-member” unless the corresponding production behavior is measured and continuously validated.
-3. **Implement WebSocket streaming or describe polling accurately.** Ten-second REST polling is not a latency-arbitrage system; it will normally be slower than dedicated market makers.
-4. **Add position reconciliation and durable state.** On start, query positions/fills/orders, reconcile them with local state, and never delete a locally tracked position until an exit fill is confirmed.
-5. **Model fees, spread, liquidity, partial fills, and cancellations.** A pre-trade edge must be net of the expected Kalshi fee and must use executable bid/ask depth rather than a heuristic table alone.
-6. **Validate strategies statistically.** Maintain timestamped signal logs and evaluate out-of-sample net P&L versus a no-trade baseline before increasing capital.
-7. **Improve tennis data.** Use a reliable live score feed that includes set/game scores, match format, surface, and current-server context before claiming a first-set comeback strategy.
-8. **Add tests and CI.** Unit-test ticker matching, price units, order direction, position exits, and each strategy’s entry/exit rules; add read-only integration tests guarded from order placement.
-
-## Reproducibility
-
-The following audit commands are included in the repository and make no authenticated trading calls:
+## Reproduction
 
 ```bash
+python3 -m unittest discover -s tests -v
 python3 audit_integration.py
-python3 audit_weather_live.py
-python3 -m py_compile $(git ls-files '*.py')
+python3 main.py --cycles 6 --interval 10 --output logs/shadow_observations.jsonl
+python3 main.py --live  # must fail before order submission
 ```
 
-## Honest next step
+No Kalshi backtest server is required. Tests mock all requests. The observation command contacts only public ESPN and Kalshi GET endpoints and exits after a bounded number of cycles. JSONL logs under `logs/` are ignored by Git. Kalshi authenticated writes are blocked independently of the command-line flag.
 
-This code should be treated as a reviewed starting point for a **paper-trading and measurement harness**, not as a demonstrated edge. The appropriate next milestone is a fee-adjusted, independently logged sample of signals and outcomes—not a larger bankroll.
+**Observed on 2026-09-25, 21:11–21:12 UTC:** six consecutive 10-second scans saw one MLB game in progress per scan, zero score changes, zero strictly matching same-time Kalshi markets, zero heuristic candidates, zero quote errors, and zero orders. Six two-sided orderbook probes for an **unmatched** future market succeeded; one sample showed YES bid `$0.45`, YES ask `$0.48`, and depth `284.73` at the ask. This proves public quote connectivity, **not** strategy effectiveness or a hypothetical fill. The prior one-cycle smoke check produced the seventh `cycle` journal row. Win rate is **undefined (0 resolved trades)**, not 0% or 100%.
 
----
+**Read-only weather check on 2026-09-25:** 191 returned members for NYC 2026-09-26 (ECMWF + AIFS 102, GFS 31, ICON 40, UKMO 18). The advertised fixed count 209 was not observed; neither the empirical ratio nor the code's confidence score is a calibrated settlement probability.
 
-**Audit author:** Manus AI
-**Repository state audited:** source commit `e01e56c`; audit documentation and read-only test scripts were published in follow-up commit `be2d981`
-**Method:** static review and read-only public API checks only; no trades were placed as part of this audit.
+## Operating options
+
+| Approach | Tradeoffs | Cost | Setup Complexity |
+| --- | --- | --- | --- |
+| Bounded read-only scans in this temporary environment | Immediate evidence and local JSONL; stops after requested cycles, cannot run unattended forever | No exchange orders/fees; no hosting purchase | Low |
+| Same observer on your own always-on machine | Durable local logs and control, but the computer must stay powered on; still **no live orders** | No additional hosted-service charge; your electricity/internet | Medium |
+
+An always-on hosted trader is premature while strategy validation and exit reconciliation remain blocked. This temporary sandbox is not durable hosting.
+
+## Independent API references
+
+- [V2 Create Order](https://docs.kalshi.com/api-reference/orders/create-order-v2): `bid` buys YES; `ask` sells YES; the submitted price is the YES price.
+- [Orderbook](https://docs.kalshi.com/api-reference/market/get-market-orderbook): YES and NO bids are returned; asks are derived from the opposite bid.
+- [Positions](https://docs.kalshi.com/api-reference/portfolio/get-positions), [Fills](https://docs.kalshi.com/api-reference/portfolio/get-fills), and [Orders](https://docs.kalshi.com/api-reference/orders/get-orders) have separate cursors/state.
+- [Rate limits](https://docs.kalshi.com/getting_started/rate_limits) use token buckets, not a fixed 20/30 requests-per-second promise.
+- [Fee schedule](https://kalshi.com/fee-schedule) has series-specific exemptions/fees; fee estimates are not authoritative actual charge records.
+- [WebSocket connection](https://docs.kalshi.com/websockets/websocket-connection) requires signed API key **headers during the handshake**. An earlier assumption that a query-parameter key was necessary was not supported by current docs; no WebSocket subscriber is implemented here.
+
+## Next gate before any `$10` live experiment
+
+1. Obtain credentials privately, with least privilege, then verify account equity, existing positions, open orders, and all relevant fills **read-only**; never commit keys or paste them in an issue/PR.
+2. Build persistent, idempotent order/fill accounting and tested, reliable exits for both sides; enforce an exchange-reconciled **absolute $10 maximum total loss/exposure**, lower per-trade cap, max orders/day, and a kill switch.
+3. Establish enough resolved, independently logged **out-of-sample** shadow signals with conservative fill assumptions and series-correct fees; report net return, drawdown, fill rate, sample size, and uncertainty, not just win percentage.
+4. Agree on exact eligible series, risk budget, maximum runtime, and execution policy before enabling writes; run a bounded supervised pilot, not an unattended loop in an ephemeral sandbox.

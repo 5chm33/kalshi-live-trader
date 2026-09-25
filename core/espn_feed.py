@@ -32,6 +32,7 @@ class GameState:
     # Derived
     lead: int = 0
     leader: str = ''
+    event_time: str = ''  # Scheduled UTC start, for strict market matching
 
     def __post_init__(self):
         self.lead = self.score_a - self.score_b
@@ -127,10 +128,11 @@ class ESPNFeed:
 
         try:
             r = requests.get(url, timeout=8)
-            if r.status_code != 200:
-                return self._cache.get(url, ([], 0))[0]
+            r.raise_for_status()
 
-            events = r.json().get('events', [])
+            events = r.json().get('events')
+            if not isinstance(events, list):
+                raise ValueError('ESPN scoreboard has no events array')
             games = []
 
             for ev in events:
@@ -183,6 +185,7 @@ class ESPNFeed:
                         period=period,
                         period_half=period_half,
                         clock=status.get('displayClock', ''),
+                        event_time=ev.get('date', ''),
                     ))
                 except Exception:
                     continue
@@ -191,5 +194,4 @@ class ESPNFeed:
             return games
 
         except Exception as e:
-            log.debug(f"[ESPN] {sport} error: {e}")
-            return self._cache.get(url, ([], 0))[0]
+            raise RuntimeError(f"ESPN {sport} read failed; aborting scan: {e}") from e

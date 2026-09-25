@@ -1,29 +1,15 @@
-"""
-SOTA Ensemble Weather Prediction Engine v2
-============================================
-Combines NWS point forecasts with Open-Meteo ensemble data from 5 world-class models:
-- ECMWF IFS 0.25° (51 members) - European Centre, gold standard
-- ECMWF AIFS 0.25° (51 members) - AI-enhanced ECMWF (machine learning post-processing)
-- GFS/GEFS (31 members) - NOAA US model
-- ICON EPS (40 members) - DWD German model
-- UKMO Global (36 members) - UK Met Office global ensemble
+"""Experimental, uncalibrated weather-model ensemble.
 
-Total: 209 independent forecast members for probability estimation.
-
-Instead of assuming a fixed ±3°F normal distribution, this engine calculates
-EMPIRICAL probabilities by counting ensemble members above/below thresholds.
-
-This gives us:
-1. More accurate probability estimates (especially for edge cases)
-2. True uncertainty quantification (spread of ensemble = forecast confidence)
-3. Multi-model consensus (when all 5 models agree, confidence is very high)
-4. AI-enhanced forecasting via ECMWF AIFS (trained on ERA5 reanalysis data)
+Member counts and availability vary by date, location, and provider. Members
+are correlated and are not independent forecasts or proven trade probabilities.
+No weather strategy is allowed to submit orders from the read-only entry point.
 """
 
 import logging
 import time
 import json
 import re
+from datetime import date as calendar_date
 from typing import Dict, Optional, Tuple, List
 from dataclasses import dataclass
 import requests
@@ -43,6 +29,7 @@ class EnsembleForecast:
     ecmwf_members: Optional[List[float]] = None
     gfs_members: Optional[List[float]] = None
     icon_members: Optional[List[float]] = None
+    ukmo_members: Optional[List[float]] = None
     
     # Ensemble statistics
     ensemble_mean: Optional[float] = None
@@ -162,19 +149,7 @@ TICKER_CITY_MAP = {
 
 
 class EnsembleWeatherEngine:
-    """
-    SOTA weather prediction engine using multi-model ensemble forecasting.
-    
-    Combines:
-    - NWS point forecasts (official US government forecast)
-    - ECMWF IFS ensemble (51 members, world's best weather model)
-    - ECMWF AIFS ensemble (51 members, AI-enhanced via machine learning)
-    - GFS/GEFS ensemble (31 members, NOAA's global model)
-    - ICON EPS ensemble (40 members, DWD's high-resolution model)
-    - UKMO Global ensemble (36 members, UK Met Office)
-    
-    Total: 209 independent forecast members for probability estimation.
-    """
+    """Research-only ensemble estimator; not a calibrated trading model."""
     
     def __init__(self):
         self.cache = {}  # {city_date: EnsembleForecast}
@@ -259,10 +234,11 @@ class EnsembleWeatherEngine:
                         break
                 
                 if date_idx is None:
-                    # Try tomorrow (index 1) as fallback
-                    date_idx = 1 if len(times) > 1 else 0
+                    # Never substitute a different settlement date.
+                    logger.warning("[ENSEMBLE] Target date %s absent for %s", date, city)
+                    return None
                 
-                # Extract all ensemble members for each model (v8: 5 models)
+                # Extract available members for each requested model.
                 ecmwf_members = []
                 ecmwf_aifs_members = []
                 gfs_members = []
@@ -292,8 +268,9 @@ class EnsembleWeatherEngine:
                 forecast.ecmwf_members = (ecmwf_members + ecmwf_aifs_members) if (ecmwf_members or ecmwf_aifs_members) else None
                 forecast.gfs_members = gfs_members if gfs_members else None
                 forecast.icon_members = icon_members if icon_members else None
+                forecast.ukmo_members = ukmo_members if ukmo_members else None
                 
-                # Calculate ensemble statistics from ALL 5 models (209 members)
+                # Calculate statistics from all members actually returned.
                 all_members = ecmwf_members + ecmwf_aifs_members + gfs_members + icon_members + ukmo_members
                 if all_members:
                     forecast.total_members = len(all_members)
@@ -361,6 +338,10 @@ class EnsembleWeatherEngine:
             for period in periods:
                 period_name = period.get('name', '').lower()
                 temp = period.get('temperature')
+                # NWS periods are local date-stamped. A different date cannot
+                # cross-validate the contract being evaluated.
+                if period.get('startTime', '')[:10] != date or temp is None:
+                    continue
                 
                 if forecast_type == 'high' and 'night' not in period_name:
                     # Daytime period = high temp
@@ -381,8 +362,7 @@ class EnsembleWeatherEngine:
         """
         Calculate empirical probability from ensemble members.
         
-        This is the KEY innovation: instead of assuming a normal distribution,
-        we count actual ensemble members above/below the threshold.
+        Count members above/below the threshold; this is not calibrated probability.
         """
         forecast.threshold = threshold
         
@@ -394,20 +374,13 @@ class EnsembleWeatherEngine:
             all_members.extend(forecast.gfs_members)
         if forecast.icon_members:
             all_members.extend(forecast.icon_members)
-        
+        if forecast.ukmo_members:
+            all_members.extend(forecast.ukmo_members)
+
         if not all_members:
-            # Fallback to NWS point forecast with normal distribution assumption
-            if forecast.nws_point_forecast is not None:
-                from scipy.stats import norm
-                std = 3.0  # Default uncertainty
-                if market_type == 'above':
-                    prob = 1 - norm.cdf(threshold, forecast.nws_point_forecast, std)
-                elif market_type == 'below':
-                    prob = norm.cdf(threshold, forecast.nws_point_forecast, std)
-                else:
-                    prob = 0.5
-                forecast.probability_above_threshold = prob if market_type == 'above' else (1 - prob)
-                forecast.forecast_confidence = 0.5  # Low confidence without ensemble
+            # No fake normal-distribution/point-forecast fallback.
+            forecast.probability_above_threshold = None
+            forecast.forecast_confidence = 0.0
             return forecast
         
         # Count members above/below threshold
@@ -431,7 +404,7 @@ class EnsembleWeatherEngine:
             # Range market - handled separately
             forecast.probability_above_threshold = p_above
         
-        # Calculate model agreement (how much do the 3 models agree?)
+        # Calculate model agreement among the available model families.
         model_probs = []
         if forecast.ecmwf_members:
             ecmwf_above = sum(1 for m in forecast.ecmwf_members if m > threshold)
@@ -442,6 +415,9 @@ class EnsembleWeatherEngine:
         if forecast.icon_members:
             icon_above = sum(1 for m in forecast.icon_members if m > threshold)
             model_probs.append(icon_above / len(forecast.icon_members))
+        if forecast.ukmo_members:
+            ukmo_above = sum(1 for m in forecast.ukmo_members if m > threshold)
+            model_probs.append(ukmo_above / len(forecast.ukmo_members))
         
         if len(model_probs) >= 2:
             # Agreement = 1 - normalized spread between model probabilities
@@ -627,12 +603,7 @@ class EnsembleWeatherEngine:
         # Direct lookup
         if series in TICKER_CITY_MAP:
             return TICKER_CITY_MAP[series]
-        
-        # Try fuzzy match - strip trailing characters
-        for prefix, city in TICKER_CITY_MAP.items():
-            if series.startswith(prefix) or prefix.startswith(series):
-                return city
-        
+        # A fuzzy city match may place a forecast on the wrong market.
         return None
     
     def _extract_date(self, ticker: str) -> Optional[str]:
@@ -650,12 +621,17 @@ class EnsembleWeatherEngine:
             'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
         }
         
-        match = re.match(r'(\d{2})([A-Z]{3})(\d{2})', date_part)
+        match = re.fullmatch(r'(\d{2})([A-Z]{3})(\d{2})', date_part)
         if match:
             year = f"20{match.group(1)}"
-            month = month_map.get(match.group(2), '01')
+            month = month_map.get(match.group(2))
+            if not month:
+                return None
             day = match.group(3)
-            return f"{year}-{month}-{day}"
+            try:
+                return calendar_date.fromisoformat(f"{year}-{month}-{day}").isoformat()
+            except ValueError:
+                return None
         
         return None
     
@@ -765,6 +741,8 @@ class EnsembleWeatherEngine:
             all_members.extend(forecast.gfs_members)
         if forecast.icon_members:
             all_members.extend(forecast.icon_members)
+        if forecast.ukmo_members:
+            all_members.extend(forecast.ukmo_members)
         
         if not all_members:
             return None

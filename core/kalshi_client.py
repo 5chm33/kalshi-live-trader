@@ -1,9 +1,7 @@
-"""
-Kalshi API Client — v10
-========================
-Clean synchronous REST client + async WebSocket client.
-Supports both legacy V1 and new V2 order endpoints.
-Uses IOC (immediate-or-cancel) for sniping stale prices.
+"""Legacy Kalshi API client retained for inspection only.
+
+All writes are blocked in _request; the supported main.py uses public reads.
+The old order/position manager is not safe for live trading.
 """
 
 import os
@@ -82,6 +80,8 @@ class KalshiClient:
     def _request(self, method: str, path: str, body: dict = None,
                  retries: int = 3, timeout: int = 12) -> Optional[dict]:
         """Rate-limited HTTP request with retry."""
+        if method != 'GET':
+            raise RuntimeError('Live order writes disabled: unvalidated strategy and position reconciliation')
         wait = self._min_interval - (time.time() - self._last_req)
         if wait > 0:
             time.sleep(wait)
@@ -140,7 +140,7 @@ class KalshiClient:
         """Get available cash balance in dollars."""
         r = self._request('GET', '/portfolio/balance')
         if not r:
-            return 0.0
+            raise RuntimeError('Cannot verify Kalshi cash balance')
         # Prefer balance_dollars (fixed-point string in dollars)
         if 'balance_dollars' in r:
             return float(r['balance_dollars'])
@@ -149,18 +149,18 @@ class KalshiClient:
             bal = r['balance']
             if isinstance(bal, (int, float)):
                 return bal / 100.0
-        return 0.0
+        raise RuntimeError('Kalshi cash balance field missing or malformed')
 
     def get_portfolio_value(self) -> float:
         """Get total portfolio value (cash + positions) in dollars."""
         r = self._request('GET', '/portfolio/balance')
         if not r:
-            return 0.0
+            raise RuntimeError('Cannot verify Kalshi portfolio value')
         if 'portfolio_value' in r:
             pv = r['portfolio_value']
             if isinstance(pv, (int, float)):
                 return pv / 100.0
-        return self.get_balance()
+        raise RuntimeError('Kalshi portfolio value field missing or malformed')
 
     # ── Markets ───────────────────────────────────────────────────────────
 
@@ -206,7 +206,7 @@ class KalshiClient:
 
         Args:
             ticker: Market ticker
-            side: 'bid' (buy YES) or 'ask' (buy NO / sell YES)
+            side: 'bid' (buy YES) or 'ask' (sell YES at a YES price)
             count: Number of contracts (float, e.g. 1.0)
             price: Price in dollars (float, e.g. 0.56)
             time_in_force: 'good_till_canceled', 'immediate_or_cancel', 'fill_or_kill'
@@ -283,17 +283,29 @@ class KalshiClient:
 
     def get_positions(self) -> List[dict]:
         r = self._request('GET', '/portfolio/positions?count_filter=position')
-        if r and 'market_positions' in r:
-            return r['market_positions']
-        return []
+        if r is None or not isinstance(r.get('market_positions'), list):
+            raise RuntimeError('Cannot verify live portfolio positions; not an empty portfolio')
+        positions = list(r['market_positions'])
+        cursor = r.get('cursor')
+        seen = set()
+        while cursor:
+            if cursor in seen or len(seen) >= 100:
+                raise RuntimeError('Positions pagination incomplete')
+            seen.add(cursor)
+            r = self._request('GET', f'/portfolio/positions?count_filter=position&cursor={cursor}')
+            if r is None or not isinstance(r.get('market_positions'), list):
+                raise RuntimeError('Positions pagination failed')
+            positions.extend(r['market_positions'])
+            cursor = r.get('cursor')
+        return positions
 
     # ── Fills ─────────────────────────────────────────────────────────────
 
     def get_fills(self, limit: int = 50) -> List[dict]:
         r = self._request('GET', f'/portfolio/fills?limit={limit}')
-        if r and 'fills' in r:
-            return r['fills']
-        return []
+        if r is None or not isinstance(r.get('fills'), list):
+            raise RuntimeError('Cannot verify fills')
+        return r['fills']
 
     # ── WebSocket auth headers ────────────────────────────────────────────
 

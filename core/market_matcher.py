@@ -8,6 +8,7 @@ them to ESPN games by team name/abbreviation.
 
 import time
 import logging
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
@@ -92,6 +93,7 @@ class MatchedGame:
     leader: str
     market_a: Optional[KalshiMarket] = None  # Market for team A
     market_b: Optional[KalshiMarket] = None  # Market for team B
+    event_time: str = ''
 
 
 class MarketMatcher:
@@ -151,6 +153,14 @@ class MarketMatcher:
         """Try to match one ESPN game to Kalshi event markets."""
         ta, tb = game.team_a.upper(), game.team_b.upper()
 
+        # Team codes repeat across a season. Missing/invalid dates are unsafe.
+        try:
+            event_time = datetime.fromisoformat(game.event_time.replace('Z', '+00:00'))
+            if event_time.tzinfo is None:
+                return None
+        except (AttributeError, ValueError):
+            return None
+
         best_match = None
         best_score = 0
 
@@ -158,6 +168,16 @@ class MarketMatcher:
             market_a = None
             market_b = None
             score = 0
+
+            try:
+                starts = {m.get('occurrence_datetime') for m in ev_markets}
+                if len(starts) != 1:
+                    continue
+                start = datetime.fromisoformat(starts.pop().replace('Z', '+00:00'))
+                if start.tzinfo is None or abs((start - event_time).total_seconds()) > 4 * 3600:
+                    continue
+            except (AttributeError, ValueError):
+                continue
 
             for m in ev_markets:
                 ticker = m.get('ticker', '').upper()
@@ -207,6 +227,7 @@ class MarketMatcher:
                     period=game.period, period_half=game.period_half,
                     lead=game.lead, leader=game.leader,
                     market_a=market_a, market_b=market_b,
+                    event_time=game.event_time,
                 )
 
         return best_match

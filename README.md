@@ -1,82 +1,36 @@
-# Kalshi Live Trader v10
+# Kalshi Trader: Read-Only Validation Build
 
-Automated prediction-market research prototype for [Kalshi](https://kalshi.com). It combines a polling-based sports signal detector, an experimental weather ensemble, and a tennis value prototype.
+This repository is a **research prototype, not a proven profitable trading bot**. The previous live entry point had order-direction, reconciliation, stale-price, strategy-calibration, and position-exit defects. `python3 main.py` now runs a **bounded, public-data, read-only observer**. All authenticated writes in `core/kalshi_client.py` are blocked. `--live` exits with an error. No API credentials or backtest server are needed for observation.
 
-> **Important:** This repository is public for independent code review. It is **not validated as profitable**, is **not high-frequency trading**, and contains known blocking integration defects. Read [AUDIT_STATUS.md](AUDIT_STATUS.md) before running it. Do not use it unattended or with money you cannot afford to lose.
+## Run the observer
 
-The project’s current behavior and limitations are documented in the audit; the architecture below describes intended components, not a guarantee that every component is currently wired into the execution loop.
-
-
-## Architecture
-
-```
-main.py (orchestrator)
-├── Fast Loop (10s) — Sports + Tennis
-│   ├── ESPN Live Score Feed → Score change detection
-│   ├── Market Matcher → Links ESPN games to Kalshi tickers
-│   ├── Latency Sniper → Buys stale prices after score changes
-│   └── Tennis Value → Rankings-based value + volatility plays
-│
-├── Slow Loop (180s) — Weather
-│   └── Experimental multi-model ensemble (live member count must be verified)
-│
-└── Position Manager — Trailing stops, profit targets, time exits
+```bash
+python3 -m pip install -r requirements.txt
+python3 -m unittest discover -s tests -v
+python3 main.py --cycles 6 --interval 10 --output logs/shadow_observations.jsonl
 ```
 
-## Strategies
+Output is append-only JSON Lines (ignored by Git). It records current ESPN MLB games, strict same-time Kalshi market matches, actual executable orderbook quotes and available depth, detected score changes, and **uncalibrated hypothetical** MLB heuristic candidates. When no live game has a matching market, it records a public quote from an unrelated market to verify both market discovery and book connectivity, but does not treat it as a trade. A `cycle_error` aborts on feed or market-data failure. Use `--cycles 1` for a one-shot check; allowed range is 1–180 scans and minimum interval is 10 seconds.
 
-### 1. Polling-Based Sports Signal Detector (MLB implemented)
-Polls ESPN score updates and evaluates a heuristic late-game baseball rule. The checked-in implementation is **MLB-only**, uses a 10-second REST polling loop, and does not implement a live WebSocket subscription or demonstrate exploitable latency after fees and fills.
+**A candidate is not a fill or win.** No P&L or win rate is computed. To measure performance, timestamp every candidate, use orderbook depth and achievable entry/exit prices, include actual fee schedule, reconcile hypothetical fills conservatively, wait for an exit/settlement, and report sample size and out-of-sample uncertainty. A handful of wins or an almost-100% win rate is not evidence of profitability; net return after fees and drawdown matter more.
 
-- **Baseball Late Lead**: A heuristic for teams up 3+ runs in the sixth inning or later; its net profitability has not been validated.
-- **Score Change Handling**: IOC orders may be submitted after detected score changes; no latency advantage has been demonstrated.
+## Safety improvements in this build
 
-### 2. Experimental Weather Ensemble (member count must be validated live)
-The engine requests five global weather-model families for temperature forecasting:
-- ECMWF IFS (51 members)
-- ECMWF AIFS (51 members)
-- GFS (31 members)
-- ICON (40 members)
-- UKMO (36 members)
+- Correct YES/NO quote math: orderbooks contain YES bids and NO bids; YES ask is `1 - best NO bid`, and NO ask is `1 - best YES bid`. An absent or one-sided book is **not** a zero-priced opportunity.
+- Exact MLB team code plus event-time match (within four hours) prevents matching today's game to tomorrow's market with the same teams.
+- Every candidate uses a newly fetched executable orderbook, not the 30-second market-discovery snapshot; bid/ask and depth are logged.
+- The standard taker-fee formula is used as an **estimate only**, subject to series-specific fees and real fill accounting. Quoted instant-exit P&L includes entry and exit estimated taker fees.
+- No substituted weather forecast date, fictitious normal-distribution fallback, or silently omitted UKMO member in the computed ensemble; missing target data means no probability.
+- Position GET failures are not treated as an empty portfolio; portfolio positions are paginated. **This does not mean live reconciliation is complete.**
+- Authenticated POST/DELETE writes are blocked at the HTTP client boundary. There is no continuous service in this temporary sandbox; an observer only runs for its configured number of scans.
 
-Quality filters: 25% min edge for range markets, 55% confidence floor, 45c max NO price.
+## Still blocked before real-money orders
 
-### 3. Experimental Tennis Value
-- Coarse rankings-based heuristic when the market underprices a favorite
-- An intended comeback heuristic; the current score feed does **not** provide the first-set state required to verify the claimed first-set-loss rule
+1. A calibrated, out-of-sample forecast advantage at *achievable* prices, after actual series fees; the MLB probability lookup and tennis rank tables are currently heuristic, not validated.
+2. End-to-end order semantics: Kalshi V2 `bid` buys YES at a **YES price**, while `ask` sells YES at a **YES price**. Buying NO economically means selling YES at `1 - NO ask`, not using a NO price as the V2 ask price.
+3. Reconciliation of open orders, positions, fills, fees, partial fills, and account equity across restarts; no fallback values when an account endpoint fails.
+4. A tested exit path on both sides, with bounded slippage, real orderbook depth, status handling, and a capital cap enforced against the exchange portfolio. IOC orders can fail to fill; stops are *conditional order requests*, not guaranteed limits on loss.
+5. Strategy-specific weather market settlement rules (station, time zone, rounding and temperature boundary semantics), model calibration and ensemble dependence. Tennis comeback needs actual set-level state. No live trade should be generated from those modules yet.
+6. Credential provisioning through a private, read-only-first integration; never commit private keys. This environment has no Kalshi credentials, and the `$10` balance has not been verified.
 
-## Setup
-
-1. Clone this repo
-2. Create `config.json`:
-```json
-{
-  "api_key": "your-kalshi-api-key",
-  "private_key_string": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
-}
-```
-3. Install dependencies: `pip install -r requirements.txt`
-4. Run: `python3 main.py`
-
-## API
-
-Uses Kalshi V2 API with:
-- **IOC orders** (Immediate-Or-Cancel) supported by the order client; they do not establish that a stale-price fill is available.
-- **RSA-PSS signing** for authentication
-- Rate-limited to 20 req/sec (well under 30/sec advanced tier limit)
-
-## Intended Risk Controls (not independently verified)
-
-- Max 8 concurrent positions
-- Max 50% of balance at risk
-- Max 20% per trade
-- Trailing stop: 20% from peak
-- Hard stop loss: -35%
-- Profit target: auto-sell at 90c
-- Time exit: 2 hours max hold for flat positions
-
-## Requirements
-
-- Python 3.10+
-- Kalshi Advanced tier API access
-- `requests` and `cryptography` packages
+Review [AUDIT_STATUS.md](AUDIT_STATUS.md) for the dated findings and links to Kalshi's current API documentation. The old implementation remains available in repository history for independent review; don't restore it as a live entry point.
