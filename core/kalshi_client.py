@@ -12,6 +12,8 @@ import json
 import logging
 import threading
 import requests
+from decimal import Decimal, InvalidOperation
+from urllib.parse import quote
 from typing import Dict, List, Optional, Callable
 
 from cryptography.hazmat.primitives import serialization, hashes
@@ -152,7 +154,7 @@ class KalshiClient:
         raise RuntimeError('Kalshi cash balance field missing or malformed')
 
     def get_portfolio_value(self) -> float:
-        """Get total portfolio value (cash + positions) in dollars."""
+        """Get API portfolio_value (position valuation, excluding available cash)."""
         r = self._request('GET', '/portfolio/balance')
         if not r:
             raise RuntimeError('Cannot verify Kalshi portfolio value')
@@ -161,6 +163,25 @@ class KalshiClient:
             if isinstance(pv, (int, float)):
                 return pv / 100.0
         raise RuntimeError('Kalshi portfolio value field missing or malformed')
+
+    def get_account_snapshot(self) -> dict:
+        """Get cash and position mark from the same authenticated response.
+
+        This is a read-only diagnostic, not evidence that trading is safe.
+        Never replace absent or erroneous account fields with zero.
+        """
+        data = self._request('GET', '/portfolio/balance')
+        if data is None:
+            raise RuntimeError('Cannot verify Kalshi account balance')
+        try:
+            cash = Decimal(str(data['balance_dollars']))
+            value = Decimal(str(data['portfolio_value'])) / 100
+        except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
+            raise RuntimeError('Kalshi account balance fields invalid') from exc
+        if not cash.is_finite() or not value.is_finite() or cash < 0 or value < 0:
+            raise RuntimeError('Kalshi account balance values invalid')
+        return {'cash_dollars': str(cash), 'position_mark_dollars': str(value),
+                'updated_ts': data.get('updated_ts')}
 
     # ── Markets ───────────────────────────────────────────────────────────
 
@@ -292,12 +313,33 @@ class KalshiClient:
             if cursor in seen or len(seen) >= 100:
                 raise RuntimeError('Positions pagination incomplete')
             seen.add(cursor)
-            r = self._request('GET', f'/portfolio/positions?count_filter=position&cursor={cursor}')
+            r = self._request('GET', f'/portfolio/positions?count_filter=position&cursor={quote(str(cursor), safe="")}')
             if r is None or not isinstance(r.get('market_positions'), list):
                 raise RuntimeError('Positions pagination failed')
             positions.extend(r['market_positions'])
             cursor = r.get('cursor')
         return positions
+
+    def get_resting_orders(self) -> List[dict]:
+        """Read every currently resting order or fail rather than undercount exposure."""
+        orders = []
+        cursor = None
+        seen = set()
+        for _ in range(100):
+            path = '/portfolio/orders?status=resting&limit=200'
+            if cursor:
+                path += '&cursor=' + quote(str(cursor), safe='')
+            data = self._request('GET', path)
+            if data is None or not isinstance(data.get('orders'), list):
+                raise RuntimeError('Cannot verify resting orders')
+            orders.extend(data['orders'])
+            cursor = data.get('cursor')
+            if not cursor:
+                return orders
+            if cursor in seen:
+                raise RuntimeError('Resting order pagination cursor loop')
+            seen.add(cursor)
+        raise RuntimeError('Resting order pagination incomplete')
 
     # ── Fills ─────────────────────────────────────────────────────────────
 

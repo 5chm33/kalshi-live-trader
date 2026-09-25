@@ -15,7 +15,9 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
+      - name: Reject tracked credentials
+        run: python scripts/check_tracked_secrets.py
       - name: Run offline tests
         run: python audit_integration.py
       - name: Compile source
-        run: python -m compileall -q core strategies main.py tests
+        run: python -m compileall -q core strategies main.py account_preflight.py account_performance.py tests
