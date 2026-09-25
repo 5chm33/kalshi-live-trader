@@ -6,6 +6,15 @@ Automated prediction-market research prototype for [Kalshi](https://kalshi.com).
 
 The project’s current behavior and limitations are documented in the audit; the architecture below describes intended components, not a guarantee that every component is currently wired into the execution loop.
 
+## Execution safety status
+
+**`python3 main.py` is intentionally fail-closed.** It exits before loading
+configuration, credentials, or constructing a venue client. Live execution is
+hard-disabled until startup and ongoing reconciliation of venue positions,
+fills, and working orders is implemented and independently validated. This is
+not a paper-trading mode and must not be enabled by editing a flag as a
+substitute for reconciliation and review.
+
 
 ## Architecture
 
@@ -56,7 +65,9 @@ Quality filters: 25% min edge for range markets, 55% confidence floor, 45c max N
 }
 ```
 3. Install dependencies: `pip install -r requirements.txt`
-4. Run: `python3 main.py`
+4. `python3 main.py` currently exits with a safety message and makes no venue
+   request. It is retained only as the future live entrypoint after the
+   reconciliation prerequisite is satisfied.
 
 ## API
 
