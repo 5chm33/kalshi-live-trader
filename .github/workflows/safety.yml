@@ -21,3 +21,10 @@ jobs:
         run: python audit_integration.py
       - name: Compile source
         run: python -m compileall -q core strategies main.py account_preflight.py account_performance.py account_limits.py position_watch.py shadow_performance.py reconcile_journal.py observe_30m.py summarize_monitor.py tests scripts
+      - name: Probe Kalshi public API with strict TLS (informational)
+        continue-on-error: true
+        run: |
+          curl --fail --silent --show-error --max-time 20 \
+            'https://external-api.kalshi.com/trade-api/v2/markets?limit=1' \
+            -o /tmp/kalshi-public-market.json
+          python -c 'import json; assert isinstance(json.load(open("/tmp/kalshi-public-market.json"))["markets"], list); print("Kalshi public TLS and JSON verified")'
