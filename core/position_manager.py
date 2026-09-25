@@ -135,7 +135,7 @@ class PositionManager:
             self._exit(ticker, reason)
 
     def _exit(self, ticker: str, reason: str):
-        """Execute an exit order."""
+        """Attempt an IOC exit without discarding an unconfirmed exposure."""
         pos = self.positions.get(ticker)
         if not pos:
             return
@@ -162,7 +162,7 @@ class PositionManager:
         result = self.client.place_ioc(ticker, v2_side, pos.contracts, sell_price)
 
         if result and result.get('order_id'):
-            filled = float(result.get('fill_count', '0'))
+            filled = self._confirmed_fill_count(result, pos.contracts)
             if filled > 0:
                 avg = float(result.get('average_fill_price', str(sell_price)))
                 pnl = (avg - pos.entry_price) * filled
@@ -173,30 +173,37 @@ class PositionManager:
                     self.losses += 1
                 log.info(f"[POS] ✓ Sold {filled:.2f} @ ${avg:.4f} | "
                          f"P&L: ${pnl:+.4f}")
+
+                remaining = pos.contracts - filled
+                if remaining > 0:
+                    # An IOC cannot leave a working remainder, but a partially
+                    # filled position is still a real account exposure. Keep it
+                    # under risk/exit monitoring until reconciliation exists.
+                    pos.contracts = remaining
+                    log.warning(f"[POS] Partial exit for {ticker}; retaining "
+                                f"{remaining:.2f} contracts for monitoring")
+                else:
+                    del self.positions[ticker]
             else:
-                log.warning(f"[POS] IOC exit got 0 fills for {ticker}")
-                # Try V1 as fallback
-                self._exit_v1(pos, sell_price)
+                log.warning(f"[POS] IOC exit got 0 confirmed fills for {ticker}; "
+                            "retaining position")
         elif result and result.get('_code') == 409:
-            log.warning(f"[POS] Market not active: {ticker} — removing")
-            self.blacklist.add(ticker)
+            log.warning(f"[POS] Market not active: {ticker}; retaining position "
+                        "because no exit fill was confirmed")
         else:
-            # Fallback to V1
-            self._exit_v1(pos, sell_price)
+            log.warning(f"[POS] IOC exit was not confirmed for {ticker}; "
+                        "retaining position")
 
-        # Remove position regardless
-        if ticker in self.positions:
-            del self.positions[ticker]
-
-    def _exit_v1(self, pos: Position, price: float):
-        """Fallback exit using V1 API."""
-        price_cents = max(1, int(round(price * 100)))
-        result = self.client.place_order_v1(
-            pos.ticker, pos.side, 'sell',
-            int(pos.contracts), price_cents
-        )
-        if result:
-            log.info(f"[POS] V1 exit placed for {pos.ticker}")
+    @staticmethod
+    def _confirmed_fill_count(result: dict, requested: float) -> float:
+        """Return a finite, bounded fill quantity from an order response."""
+        try:
+            filled = float(result.get('fill_count', 0))
+        except (TypeError, ValueError):
+            return 0.0
+        if filled != filled or filled == float('inf') or filled == float('-inf'):
+            return 0.0
+        return min(max(filled, 0.0), requested)
 
     def _to_dollars(self, val) -> float:
         if val is None:

@@ -32,6 +32,20 @@ from strategies.latency_sniper import LatencySniper
 from strategies.tennis_value import TennisValueStrategy
 from strategies.weather_ensemble import EnsembleWeatherEngine
 
+# This is deliberately a hard-coded safety interlock, not a configuration
+# option. Live execution must remain unavailable until venue positions, fills,
+# and working orders are reconciled before every risk decision.
+LIVE_EXECUTION_ENABLED = False
+LIVE_EXECUTION_DISABLED_MESSAGE = (
+    "Live execution is disabled: execution/position reconciliation has not "
+    "been implemented and validated. No venue request was made."
+)
+
+
+class LiveExecutionDisabled(RuntimeError):
+    """Raised when code attempts to construct the disabled live trader."""
+
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 os.makedirs('logs', exist_ok=True)
 logging.basicConfig(
@@ -97,6 +111,9 @@ def banner():
 
 class LiveTrader:
     def __init__(self, config: dict):
+        if not LIVE_EXECUTION_ENABLED:
+            raise LiveExecutionDisabled(LIVE_EXECUTION_DISABLED_MESSAGE)
+
         self.config = config
         self.scan_count = 0
         self.start_time = time.time()
@@ -388,11 +405,12 @@ class LiveTrader:
 
 
 def main():
-    banner()
-    config = load_config()
-    bot = LiveTrader(config)
-    bot.run()
+    # Do not load credentials/configuration or instantiate a client while the
+    # reconciliation prerequisite is unmet. This entrypoint must not make an
+    # authenticated or public venue request in its disabled state.
+    log.critical("[SAFETY] %s", LIVE_EXECUTION_DISABLED_MESSAGE)
+    return 1
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
