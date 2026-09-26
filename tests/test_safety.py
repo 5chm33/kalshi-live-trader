@@ -8,7 +8,7 @@ from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
-from core.espn_feed import ESPNFeed, GameState
+from core.espn_feed import ESPNFeed, GameState, mlb_scoreboard_dates
 from core.kalshi_client import KalshiClient
 from core.market_matcher import MarketMatcher
 from core.public_market import MarketDataError, PublicMarketClient, quote_from_orderbook
@@ -163,6 +163,39 @@ class MarketPaginationTests(unittest.TestCase):
 
 
 class ESPNTests(unittest.TestCase):
+    def test_mlb_uses_explicit_eastern_day_not_stale_default(self):
+        at = datetime(2026, 9, 26, 14, 9, tzinfo=timezone.utc)
+        self.assertEqual(mlb_scoreboard_dates(at), ['20260926'])
+        feed = ESPNFeed(sports=['mlb'])
+        feed._fetch = Mock(return_value=[])
+        with patch('core.espn_feed.mlb_scoreboard_dates', return_value=['20260926']):
+            self.assertEqual(feed.poll(), ([], []))
+        feed._fetch.assert_called_once_with(feed.URLS['mlb'], 'mlb', {'dates': '20260926'})
+
+    def test_late_eastern_rollover_covers_both_days_and_deduplicates(self):
+        at = datetime(2026, 9, 27, 5, 30, tzinfo=timezone.utc)
+        self.assertEqual(mlb_scoreboard_dates(at), ['20260926', '20260927'])
+        old = GameState(sport='mlb', game_id='g', team_a='PIT', team_b='DET',
+                        team_a_full='Pirates', team_b_full='Tigers', score_a=1,
+                        score_b=0, state='in', event_time='2026-09-26T17:10:00Z')
+        newer = GameState(sport='mlb', game_id='g', team_a='PIT', team_b='DET',
+                          team_a_full='Pirates', team_b_full='Tigers', score_a=2,
+                          score_b=0, state='in', event_time='2026-09-26T17:10:00Z')
+        feed = ESPNFeed(sports=['mlb'])
+        feed._fetch = Mock(side_effect=[[old], [newer]])
+        with patch('core.espn_feed.mlb_scoreboard_dates', return_value=['20260926', '20260927']):
+            games, changes = feed.poll()
+        self.assertEqual(len(games), 1)
+        self.assertEqual(games[0].score_a, 2)
+        self.assertEqual(changes, [])
+
+    def test_mlb_second_date_failure_aborts_scan(self):
+        feed = ESPNFeed(sports=['mlb'])
+        feed._fetch = Mock(side_effect=[[], RuntimeError('ESPN unavailable')])
+        with patch('core.espn_feed.mlb_scoreboard_dates', return_value=['20260926', '20260927']):
+            with self.assertRaisesRegex(RuntimeError, 'unavailable'):
+                feed.poll()
+
     def test_http_error_does_not_reuse_old_scores(self):
         feed = ESPNFeed(sports=["mlb"])
         feed._cache[feed.URLS["mlb"]] = (["stale-data"], 0)

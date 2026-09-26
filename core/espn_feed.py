@@ -8,10 +8,26 @@ Detects score changes and emits events for the trading engine.
 import time
 import logging
 import requests
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
+from zoneinfo import ZoneInfo
 
 log = logging.getLogger('KALSHI')
+
+
+def mlb_scoreboard_dates(at: datetime | None = None) -> list[str]:
+    """Ask for the scheduled Eastern baseball date, not ESPN's lagging default.
+
+    Between Eastern midnight and 10:00 a.m., yesterday's late/extra-inning
+    game might still be in progress. Both date queries must succeed; the caller
+    deduplicates event IDs. An unavailable day is an explicit feed error.
+    """
+    local = (at or datetime.now(timezone.utc)).astimezone(ZoneInfo('America/New_York'))
+    days = [local.date()]
+    if local.hour < 10:
+        days.insert(0, local.date() - timedelta(days=1))
+    return [day.strftime('%Y%m%d') for day in days]
 
 
 @dataclass
@@ -92,7 +108,18 @@ class ESPNFeed:
             url = self.URLS.get(sport)
             if not url:
                 continue
-            games = self._fetch(url, sport)
+            if sport == 'mlb':
+                seen = {}
+                for day in mlb_scoreboard_dates():
+                    for game in self._fetch(url, sport, {'dates': day}):
+                        if not game.game_id:
+                            raise RuntimeError('ESPN MLB game lacks a stable event ID')
+                        # If ESPN includes a postponed game in both days, the
+                        # second request is fresher; never count it twice.
+                        seen[game.game_id] = game
+                games = list(seen.values())
+            else:
+                games = self._fetch(url, sport)
             for g in games:
                 if g.state != 'in':
                     continue
@@ -118,17 +145,20 @@ class ESPNFeed:
 
         return all_games, changes
 
-    def _fetch(self, url: str, sport: str) -> List[GameState]:
+    def _fetch(self, url: str, sport: str, params: dict | None = None) -> List[GameState]:
         # Cache check
         now = time.time()
-        if url in self._cache:
-            data, ts = self._cache[url]
+        cache_key = (url, tuple(sorted((params or {}).items())))
+        if cache_key in self._cache:
+            data, ts = self._cache[cache_key]
             if now - ts < self._cache_ttl:
                 return data
 
         try:
-            r = requests.get(url, timeout=8)
+            r = requests.get(url, params=params, timeout=8, allow_redirects=False)
             r.raise_for_status()
+            if 300 <= r.status_code < 400:
+                raise ValueError('Unexpected ESPN scoreboard redirect')
 
             events = r.json().get('events')
             if not isinstance(events, list):
@@ -190,7 +220,7 @@ class ESPNFeed:
                 except Exception:
                     continue
 
-            self._cache[url] = (games, now)
+            self._cache[cache_key] = (games, now)
             return games
 
         except Exception as e:
