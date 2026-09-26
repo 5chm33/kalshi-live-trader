@@ -20,6 +20,12 @@ For **finite, restart-safe forward observation only** on a persistent computer, 
 
 After at least one segment completes, run `python3 forward_evidence.py logs/forward --output logs/forward_evidence.md`. This summarizes **only completed** real-data segments, marks current/incomplete segments separately, lists matched games versus both-sided book coverage, and refuses to label hypothetical prices as actual fills or profit. A genuine one-sided/empty book is logged as valid-but-**untradeable** `unusable_book`; failed reads and malformed books remain `quote_error`, and those segments cannot receive a hypothetical win rate. Repeated snapshots of the same game are not independent opportunities. The collector and report never activate trading.
 
+## Preregistered MLB microstructure audit (public GETs only)
+
+`collect_mlb_microstructure.py` is a **finite, seven-day-maximum, no-key, no-order** audit of the first 120 eligible future MLB full-game events. It archives both winner markets' explicit original scheduled starts from their rules, the current `KXMLBGAME` fee type/multiplier and event overrides, price grids, independently timestamped YES/NO depth-one books, and later Kalshi settlement values. Use `python3 collect_mlb_microstructure.py --until-utc FUTURE_UTC_DEADLINE --output logs/mlb_microstructure.jsonl` with a future deadline no more than seven days away. `python3 microstructure_report.py logs/mlb_microstructure.jsonl --output logs/mlb_microstructure_report.md` reports a single fixed decision observation per game, not one trial per 10-second poll. See [the frozen study design](MLB_MICROSTRUCTURE_STUDY.md) for exclusions and the 80/120 falsification gate. Passing the displayed-book screen cannot prove that two maker bids will fill; no live activation is automatic.
+
+`python3 audit_weather_sources.py --check-open --output logs/weather_sources.json` inventories the public settlement-source labels of daily temperature series and checks whether any have current open contracts. **Do not assume that an NWS forecast determines a weather market's payout**: a live `KXHIGHNY` contract explicitly named The Weather Company instead. At the Sep 26 public check, 17 NWS-named daily-temperature series were listed but **zero had open markets**. The inventory neither estimates forecast accuracy nor makes a trade; availability must be checked again when used.
+
 ## Optional private account diagnostics (GET-only)
 
 If you own a Kalshi key, store its key ID and PEM in a local **untracked** `config.json` with mode `0600`; never put credentials in a GitHub PR, issue, chat message, CI secret on a public fork, or read-only observation log. The following commands authenticate only to read balance, **primary-subaccount open positions**, resting orders, and recent fills; the performance check reads live and historical market positions. Do not infer other subaccounts are flat from this report:
@@ -46,7 +52,7 @@ The GET-only recovery worker `python3 reconcile_journal.py --config config.json 
 ## Safety improvements in this build
 
 - Correct YES/NO quote math: orderbooks contain YES bids and NO bids; YES ask is `1 - best NO bid`, and NO ask is `1 - best YES bid`. An absent or one-sided book is **not** a zero-priced opportunity.
-- Exact MLB team code plus event-time match (within four hours) prevents matching today's game to tomorrow's market with the same teams.
+- Exact MLB team code plus **original start time parsed from both market rules** (within 30 minutes of ESPN's scheduled time) rejects tomorrow's game or a same-team doubleheader. Kalshi's `occurrence_datetime` can be three hours later than first pitch and is not used as the MLB matching anchor.
 - Every candidate uses a newly fetched executable orderbook, not the 30-second market-discovery snapshot; bid/ask and depth are logged.
 - The standard taker-fee formula is used as an **estimate only**, subject to series-specific fees and real fill accounting. Quoted instant-exit P&L includes entry and exit estimated taker fees.
 - No substituted weather forecast date, fictitious normal-distribution fallback, or silently omitted UKMO member in the computed ensemble; missing target data means no probability.

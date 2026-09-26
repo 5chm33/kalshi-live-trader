@@ -11,6 +11,8 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
+from core.microstructure import scheduled_start
+from core.public_market import MarketDataError
 
 log = logging.getLogger('KALSHI')
 
@@ -170,13 +172,18 @@ class MarketMatcher:
             score = 0
 
             try:
-                starts = {m.get('occurrence_datetime') for m in ev_markets}
-                if len(starts) != 1:
+                if game.sport == 'mlb':
+                    start = scheduled_start(ev_markets)
+                    tolerance = 30 * 60
+                else:
+                    starts = {m.get('occurrence_datetime') for m in ev_markets}
+                    if len(starts) != 1:
+                        continue
+                    start = datetime.fromisoformat(starts.pop().replace('Z', '+00:00'))
+                    tolerance = 4 * 3600
+                if start.tzinfo is None or abs((start - event_time).total_seconds()) > tolerance:
                     continue
-                start = datetime.fromisoformat(starts.pop().replace('Z', '+00:00'))
-                if start.tzinfo is None or abs((start - event_time).total_seconds()) > 4 * 3600:
-                    continue
-            except (AttributeError, ValueError):
+            except (AttributeError, ValueError, MarketDataError):
                 continue
 
             for m in ev_markets:

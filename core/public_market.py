@@ -112,9 +112,29 @@ class PublicMarketClient:
             seen.add(cursor)
         raise MarketDataError("Market pagination exceeded 10 pages; data incomplete")
 
-    def get_orderbook(self, ticker: str) -> dict:
-        payload = self._get(f"/markets/{ticker}/orderbook")
+    def get_orderbook(self, ticker: str, *, depth: int | None = None) -> dict:
+        if depth is not None and (isinstance(depth, bool) or not isinstance(depth, int)
+                                  or not 1 <= depth <= 100):
+            raise MarketDataError("Orderbook depth must be 1–100")
+        payload = self._get(f"/markets/{ticker}/orderbook",
+                            {"depth": depth} if depth is not None else None)
         book = payload.get("orderbook_fp")
         if not isinstance(book, dict):
             raise MarketDataError("Missing orderbook_fp")
         return book
+
+    def get_series(self, ticker: str) -> dict:
+        if not ticker or not ticker.isalnum():
+            raise MarketDataError("Invalid series ticker")
+        data = self._get(f"/series/{ticker}").get("series")
+        if not isinstance(data, dict) or data.get("ticker") != ticker:
+            raise MarketDataError("Missing or mismatched series metadata")
+        return data
+
+    def get_event(self, ticker: str) -> dict:
+        if not ticker or not all(c.isalnum() or c == '-' for c in ticker):
+            raise MarketDataError("Invalid event ticker")
+        data = self._get(f"/events/{ticker}", {"with_nested_markets": "true"}).get("event")
+        if not isinstance(data, dict) or data.get("event_ticker") != ticker or not isinstance(data.get("markets"), list):
+            raise MarketDataError("Missing or mismatched event metadata")
+        return data

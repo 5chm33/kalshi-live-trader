@@ -5,6 +5,7 @@ import io
 import json
 import unittest
 from decimal import Decimal
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 from core.espn_feed import ESPNFeed, GameState
@@ -16,10 +17,14 @@ from strategies.latency_sniper import LatencySniper
 from strategies.weather_ensemble import EnsembleForecast, EnsembleWeatherEngine
 
 
-def market(team, occurrence="2026-09-25T20:05:00Z"):
+def market(team, occurrence="2026-09-25T23:05:00Z"):
+    original_start = (datetime.fromisoformat(occurrence.replace('Z', '+00:00'))
+                      - timedelta(hours=3)).astimezone(timezone(timedelta(hours=-4)))
+    rule_time = original_start.strftime('%b %-d, %Y at %-I:%M %p EDT')
     return {"ticker": f"KXMLBGAME-26SEP252005BALNYY-{team}",
             "event_ticker": "KXMLBGAME-26SEP252005BALNYY",
             "occurrence_datetime": occurrence, "status": "active",
+            "rules_primary": f"If {team} wins the game originally scheduled for {rule_time}, then the market resolves to Yes.",
             "yes_bid_dollars": "0.4500", "yes_ask_dollars": "0.5500"}
 
 
@@ -73,6 +78,11 @@ class MatchingTests(unittest.TestCase):
         self.assertEqual(matched.market_b.team_key, "NYY")
         self.assertEqual(matched.event_time, self.game.event_time)
 
+    def test_same_team_game_two_hours_later_cannot_match(self):
+        other = [market("BAL", "2026-09-26T01:05:00Z"),
+                 market("NYY", "2026-09-26T01:05:00Z")]
+        self.assertIsNone(self.matcher._match_one(self.game, {"other": other}))
+
     def test_missing_start_time_is_not_safe(self):
         self.game.event_time = ""
         self.assertIsNone(self.matcher._match_one(self.game, {"x": [market("BAL"), market("NYY")]}))
@@ -118,6 +128,21 @@ class PortfolioTests(unittest.TestCase):
 
 
 class MarketPaginationTests(unittest.TestCase):
+    def test_event_requests_nested_markets_and_book_depth_one(self):
+        session = Mock()
+        reply = Mock(status_code=200)
+        reply.json.side_effect = [
+            {'event': {'event_ticker': 'A-B', 'markets': [{}, {}]}},
+            {'orderbook_fp': {'yes_dollars': [], 'no_dollars': []}}]
+        session.get.return_value = reply
+        client = PublicMarketClient(session)
+        self.assertEqual(len(client.get_event('A-B')['markets']), 2)
+        self.assertEqual(session.get.call_args.kwargs['params'], {'with_nested_markets': 'true'})
+        client.get_orderbook('A-B', depth=1)
+        self.assertEqual(session.get.call_args.kwargs['params'], {'depth': 1})
+        with self.assertRaises(MarketDataError):
+            client.get_orderbook('A-B', depth=0)
+
     def test_missing_page_fails_instead_of_returning_partial_data(self):
         session = Mock()
         first = Mock(status_code=200)
