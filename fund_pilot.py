@@ -91,39 +91,59 @@ def fund(client: KalshiClient, path: Path) -> dict:
         if path.is_symlink() or stat.S_IMODE(path.stat().st_mode) & 0o077:
             raise PermissionError('Unsafe existing funding journal')
         record = json.loads(path.read_text())
-        if record.get('stage') != 'funded':
-            raise VenueError('Prior funding write could be in-flight; stop and inspect the private journal')
-        if (balance(client, record['subaccount'], MLB_SHARD) < Decimal('0.55') or
-                balance(client, record['subaccount'], MLB_SHARD) > CAP):
-            raise VenueError('Already-funded pilot account has unexpected balance')
-        return record
-    if client.get_api_limits()['usage_tier'] not in {'advanced', 'expert', 'premier', 'paragon', 'prime', 'prestige'}:
-        raise VenueError('Advanced tier required for numbered subaccount')
-    account = private_get(client, '/portfolio/subaccounts/balances')
-    records = account.get('subaccount_balances')
-    if not isinstance(records, list) or any(r.get('subaccount_number') != 0 for r in records):
-        raise VenueError('Unexpected existing numbered subaccount; do not reuse for pilot')
-    primary0, primary3 = balance(client, 0, 0), balance(client, 0, MLB_SHARD)
-    if primary0 < CAP or primary3 != 0:
-        raise VenueError('Primary exchange cash no longer matches isolated funding preflight')
-    record = {'stage': 'cross_shard_submitting', 'amount_dollars': str(CAP),
-              'source_shard': 0, 'target_shard': MLB_SHARD}
-    save_stage(path, record)  # durable BEFORE irreversible POST
-    result = once_post(client, '/portfolio/intra_exchange_instance_transfer',
-                       {'source': 'event_contract', 'destination': 'event_contract',
-                        'amount': TRANSFER_CENTICENTS, 'source_exchange_shard': 0,
-                        'destination_exchange_shard': MLB_SHARD,
-                        'source_subaccount': 0, 'destination_subaccount': 0})
-    transfer_id = result.get('transfer_id')
-    if not isinstance(transfer_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,128}', transfer_id):
-        raise VenueError('Cross-shard transfer ACK ambiguous; inspect journal and venue')
-    record.update(stage='cross_shard_pending', transfer_id=transfer_id)
-    save_stage(path, record)
+        if record.get('stage') == 'funded':
+            if (balance(client, record['subaccount'], MLB_SHARD) < Decimal('0.55') or
+                    balance(client, record['subaccount'], MLB_SHARD) > CAP):
+                raise VenueError('Already-funded pilot account has unexpected balance')
+            return record
+        if record.get('stage') != 'cross_shard_pending':
+            raise VenueError('Prior funding write could be in-flight; stop and inspect private journal')
+        if (record.get('amount_dollars') != str(CAP) or record.get('source_shard') != 0
+                or record.get('target_shard') != MLB_SHARD or not isinstance(record.get('transfer_id'), str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]{8,128}', record['transfer_id'])):
+            raise VenueError('Existing transfer intent fails original $2 identity check')
+        account = private_get(client, '/portfolio/subaccounts/balances')
+        records = account.get('subaccount_balances')
+        if not isinstance(records, list) or any(r.get('subaccount_number') != 0 for r in records):
+            raise VenueError('Unexpected new subaccount since cross-shard transfer')
+        transfer_id = record['transfer_id']
+    else:
+        if client.get_api_limits()['usage_tier'] not in {'advanced', 'expert', 'premier', 'paragon', 'prime', 'prestige'}:
+            raise VenueError('Advanced tier required for numbered subaccount')
+        account = private_get(client, '/portfolio/subaccounts/balances')
+        records = account.get('subaccount_balances')
+        if not isinstance(records, list) or any(r.get('subaccount_number') != 0 for r in records):
+            raise VenueError('Unexpected existing numbered subaccount; do not reuse for pilot')
+        primary0, primary3 = balance(client, 0, 0), balance(client, 0, MLB_SHARD)
+        if primary0 < CAP or primary3 != 0:
+            raise VenueError('Primary exchange cash no longer matches isolated funding preflight')
+        record = {'stage': 'cross_shard_submitting', 'amount_dollars': str(CAP),
+                  'source_shard': 0, 'target_shard': MLB_SHARD}
+        save_stage(path, record)  # durable BEFORE irreversible POST
+        result = once_post(client, '/portfolio/intra_exchange_instance_transfer',
+                           {'source': 'event_contract', 'destination': 'event_contract',
+                            'amount': TRANSFER_CENTICENTS, 'source_exchange_shard': 0,
+                            'destination_exchange_shard': MLB_SHARD,
+                            'source_subaccount': 0, 'destination_subaccount': 0})
+        transfer_id = result.get('transfer_id')
+        if not isinstance(transfer_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,128}', transfer_id):
+            raise VenueError('Cross-shard transfer ACK ambiguous; inspect journal and venue')
+        record.update(stage='cross_shard_pending', transfer_id=transfer_id)
+        save_stage(path, record)
     for _ in range(20):
-        view = private_get(client, '/portfolio/intra_exchange_instance_transfers/' + transfer_id).get('transfer')
+        try:
+            view = private_get(client, '/portfolio/intra_exchange_instance_transfers/' + transfer_id).get('transfer')
+        except VenueError:
+            time.sleep(3)
+            continue
         if not isinstance(view, dict) or view.get('transfer_id') != transfer_id:
             raise VenueError('Cross-shard transfer GET identity mismatch')
-        if view.get('status') in ('completed', 'success', 'succeeded'):
+        if (view.get('source') != 'event_contract' or view.get('destination') != 'event_contract'
+                or view.get('source_exchange_shard') != 0
+                or view.get('destination_exchange_shard') != MLB_SHARD
+                or money(view.get('amount'), 'venue transfer amount') != CAP):
+            raise VenueError('Exchange transfer source, shard, or $2 amount mismatch')
+        if view.get('status') in ('complete', 'completed', 'success', 'succeeded'):
             break
         if view.get('status') not in ('pending', 'processing', 'in_progress'):
             raise VenueError('Cross-shard transfer failed or has unknown status; no retry')

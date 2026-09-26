@@ -56,7 +56,10 @@ class FundingTests(unittest.TestCase):
             path = Path(temp) / 'funding.json'
             get.side_effect = lambda c, endpoint: (
                 {'subaccount_balances': [{'subaccount_number': 0}]} if 'balances' in endpoint else
-                {'transfer': {'transfer_id': 'transfer-1234', 'status': 'completed'}})
+                {'transfer': {'transfer_id': 'transfer-1234', 'status': 'complete',
+                              'source': 'event_contract', 'destination': 'event_contract',
+                              'source_exchange_shard': 0, 'destination_exchange_shard': 3,
+                              'amount': '2.0000'}})
             seen = []
 
             def current_cash(_client, sub, shard):
@@ -96,6 +99,28 @@ class FundingTests(unittest.TestCase):
             self.assertEqual(seen, ['cross', 'create', 'sub'])
             self.assertEqual(fund(client, path)['subaccount'], 1)
             self.assertEqual(seen, ['cross', 'create', 'sub'])
+
+    def test_resumes_acknowledged_transfer_without_second_cross_write(self):
+        client = Mock()
+        with tempfile.TemporaryDirectory() as temp, patch('fund_pilot.private_get') as get, \
+                patch('fund_pilot.balance') as balance, patch('fund_pilot.once_post') as post:
+            path = Path(temp) / 'funding.json'
+            save_stage(path, {'stage': 'cross_shard_pending', 'amount_dollars': '2.00',
+                              'source_shard': 0, 'target_shard': 3, 'transfer_id': 'transfer-1234'})
+            get.side_effect = lambda c, endpoint: (
+                {'subaccount_balances': [{'subaccount_number': 0}]} if 'balances' in endpoint else
+                {'transfer': {'transfer_id': 'transfer-1234', 'status': 'complete',
+                              'source': 'event_contract', 'destination': 'event_contract',
+                              'source_exchange_shard': 0, 'destination_exchange_shard': 3,
+                              'amount': '2.0000'}})
+            balance.side_effect = lambda _c, sub, shard: (
+                D('2.00') if (sub, shard) == (0, 3) else D('1.00'))
+            post.side_effect = lambda _c, endpoint, body: {'subaccount_number': 1}
+            with self.assertRaisesRegex(VenueError, 'unexpectedly has cash'):
+                fund(client, path)
+            self.assertEqual(post.call_count, 1)
+            self.assertEqual(post.call_args.args[1], '/portfolio/subaccounts')
+            self.assertEqual(json.loads(path.read_text())['stage'], 'created')
 
 
 if __name__ == '__main__':
