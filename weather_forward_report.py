@@ -48,6 +48,34 @@ def render(journal: Path) -> str:
         lines.append(f'| {key} | captured | {forecast} | {source_value} | {settled} | {note} |')
     if not decisions:
         lines.append('| — | Waiting for first registered cutoff | — | — | No | — |')
+    lines += ['', '## Displayed one-contract break-even probability hurdles', '',
+              '**Not a forecast probability or trade signal.** Values are cutoff-time public asks plus the archived conservative one-unit taker-fee ceiling. A later fill may differ; model uncertainty requires a further predeclared margin.', '',
+              '| Climate date | Contract | YES ask + fee hurdle | NO ask + fee hurdle | Displayed one-unit depth |',
+              '| --- | --- | ---: | ---: | --- |']
+    have_complete_book=False
+    for day, row in sorted(decisions.items()):
+        if row['type'] != 'decision_observation' or 'markets' not in row:
+            continue
+        markets={m['ticker']:m for m in row['markets']}
+        if len(markets) != len(row['books']) or {b['ticker'] for b in row['books']} != set(markets):
+            raise ValueError('Weather report market/book identity mismatch')
+        for book in row['books']:
+            have_complete_book=True
+            q=book.get('quote')
+            if q is None:
+                lines.append(f'| {day} | {book["ticker"]} | — | — | one-sided/empty; ineligible |')
+                continue
+            yes=Decimal(q['yes_ask'])+Decimal(q['indicative_yes_taker_fee_ceiling'])
+            no=Decimal(q['no_ask'])+Decimal(q['indicative_no_taker_fee_ceiling'])
+            ydepth=Decimal(q['yes_ask_size_fp'])
+            ndepth=Decimal(q['no_ask_size_fp'])
+            if not (0<yes<=1 and 0<no<=1 and ydepth>=0 and ndepth>=0):
+                raise ValueError('Malformed weather fee hurdle or displayed book depth')
+            lines.append(f'| {day} | {book["ticker"]} | '
+                         f'{yes:.4f} ({ydepth:.2f} shown) | {no:.4f} ({ndepth:.2f} shown) | '
+                         f'{"both ≥1" if min(ydepth,ndepth)>=1 else "insufficient for one side"} |')
+    if not have_complete_book:
+        lines.append('| — | No full market/book rows yet | — | — | — |')
     lines += ['', '**Interpretation:** At least 30 complete source-matched days are needed before freezing any probability calibration rule, followed by at least 30 new out-of-sample dates; neither threshold proves future profitability. TWC revisions, market-rule changes, or missing books remain visible, not backfilled.', '',
               'Sources: [Kalshi daily-weather rules](https://help.kalshi.com/en/articles/13823837-weather-markets), [TWC/Kalshi final climate portal](https://weather.com/kalshi), [NWS forecast API](https://www.weather.gov/documentation/services-web-API).', '']
     return '\n'.join(lines)

@@ -33,6 +33,24 @@ class WeatherReportTests(unittest.TestCase):
         self.assertIn('Fee-adjusted returns and win percentage: **undefined**',text)
         self.assertNotIn('100%',text)
 
+    def test_fee_hurdle_never_claimed_as_forecast_or_fill(self):
+        with tempfile.TemporaryDirectory() as d:
+            start,decision=self.sample()
+            decision['markets']=[{'ticker':'KXHIGHNY-26SEP27-T65'},
+                                 {'ticker':'KXHIGHNY-26SEP27-T72'}]
+            decision['books']=[{'ticker':'KXHIGHNY-26SEP27-T65','quote':{
+                'yes_ask_size_fp':'105.04','yes_ask':'0.6200',
+                'no_ask_size_fp':'198.00','no_ask':'0.3900',
+                'indicative_yes_taker_fee_ceiling':'0.0200',
+                'indicative_no_taker_fee_ceiling':'0.0200'}},
+                               {'ticker':'KXHIGHNY-26SEP27-T72','quote':None}]
+            text=render(self.journal(d,[start,decision]))
+        self.assertIn('0.6400 (105.04 shown)',text)
+        self.assertIn('0.4100 (198.00 shown)',text)
+        self.assertIn('one-sided/empty; ineligible',text)
+        self.assertIn('Not a forecast probability or trade signal',text)
+        self.assertIn('Fee-adjusted returns and win percentage: **undefined**',text)
+
     def test_verified_source_and_venue_counted_once(self):
         with tempfile.TemporaryDirectory() as d:
             start,decision=self.sample()
