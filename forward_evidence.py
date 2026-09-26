@@ -22,6 +22,8 @@ def report(directory: Path) -> str:
     bad = []
     shadow_priced = 0
     shadow_net = 0.0
+    legacy_reclassified = 0
+    measured_pair_segments = 0
     for path in files:
         if path.is_symlink() or not path.is_file():
             raise PermissionError('Forward journal must be a regular file')
@@ -44,12 +46,22 @@ def report(directory: Path) -> str:
             continue
         end = next(r for r in records if r.get('type') == 'monitor_end')
         count = end['totals']
+        known_legacy_illiquidity = sum(r.get('type') == 'quote_error' and
+                                       r.get('error') == 'One-sided or empty executable book'
+                                       for r in records)
+        if known_legacy_illiquidity > count.get('quote_errors', 0):
+            bad.append(f'{path.name}: legacy book counts do not reconcile')
+            continue
+        legacy_reclassified += known_legacy_illiquidity
+        measured_pair_segments += 'two_sided_game_pairs' in count
         completed += 1
         for k in ('cycles', 'espn_ok', 'kalshi_ok', 'source_errors', 'quote_errors',
                   'unusable_books', 'strict_matches', 'two_sided_game_pairs',
                   'candidates', 'real_orders'):
             if k in count:
                 totals[k] += count[k]
+        totals['quote_errors'] -= known_legacy_illiquidity
+        totals['unusable_books'] += known_legacy_illiquidity
         if 'Sampling continuity | interrupted' in summary or count.get('source_errors', 0) or count.get('quote_errors', 0):
             bad.append(f'{path.name}: incomplete data or sampling gap')
             continue
@@ -65,11 +77,12 @@ def report(directory: Path) -> str:
         raise ValueError('Read-only journal unexpectedly claims actual bot orders')
     lines = [
         '# Forward Kalshi research: current real-data status', '',
-        f'- Completed, validated segments: **{completed}**; unfinished segments: **{partial}**.',
+        f'- Completed, structurally valid segments: **{completed}**; unfinished segments: **{partial}**.',
         f'- Completed public ESPN/Kalshi cycles: **{totals["espn_ok"]}/{totals["kalshi_ok"]}** of **{totals["cycles"]}**.',
         f'- Source errors: **{totals["source_errors"]}**; failed/malformed book reads: **{totals["quote_errors"]}**.',
         f'- Valid one-sided or empty book snapshots (not executable): **{totals["unusable_books"]}**.',
-        f'- Repeated strict game matches: **{totals["strict_matches"]}**; matched-game snapshots with two executable team books: **{totals["two_sided_game_pairs"]}**. These are *not independent opportunities*.',
+        f'- One-sided snapshots originally mislabeled as book errors in legacy journals: **{legacy_reclassified}**; these remain unsuitable for historical shadow scoring.',
+        f'- Repeated strict game matches: **{totals["strict_matches"]}**; matched-game snapshots with two executable team books: **{totals["two_sided_game_pairs"] if measured_pair_segments else "unknown (not measured in completed legacy segments)"}**. These are *not independent opportunities*.',
         f'- Uncalibrated candidates: **{totals["candidates"]}**; depth-qualified hypothetical short-horizon exits: **{shadow_priced}**.',
         f'- Observed hypothetical one-contract net across evaluable excerpts: **{f"${shadow_net:.4f}" if shadow_priced else "unavailable (no observed exits)"}**. This is not realized P&L or an achievable fill.',
         f'- Actual bot orders: **{totals["real_orders"]}**; realized bot P&L and bot win rate: **undefined**.',

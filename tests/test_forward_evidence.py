@@ -33,7 +33,7 @@ class ForwardReportTests(unittest.TestCase):
             incomplete = Path(tmp) / 'partial.jsonl'
             incomplete.write_text(json.dumps(segment()[0]) + '\n')
             text = report(Path(tmp))
-        self.assertIn('Completed, validated segments: **1**; unfinished segments: **1**', text)
+        self.assertIn('Completed, structurally valid segments: **1**; unfinished segments: **1**', text)
         self.assertIn('unavailable (no observed exits)', text)
         self.assertIn('Actual bot orders: **0**', text)
         self.assertIn('LIVE TRADING DISABLED', text)
@@ -49,6 +49,23 @@ class ForwardReportTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, 'No real forward'):
                 report(Path(tmp))
+
+    def test_legacy_one_sided_books_are_reclassified_but_not_scored(self):
+        rows = segment(unusable=0)
+        rows[1] = {'type': 'quote_error', 'ticker': 'FAKE',
+                   'error': 'One-sided or empty executable book'}
+        rows[2]['quote_errors'] = 1
+        rows[2].pop('two_sided_game_pairs')
+        rows[-1]['totals']['quote_errors'] = 1
+        rows[-1]['totals'].pop('two_sided_game_pairs')
+        with TemporaryDirectory() as tmp:
+            (Path(tmp) / 'legacy.jsonl').write_text(
+                ''.join(json.dumps(r) + '\n' for r in rows))
+            text = report(Path(tmp))
+        self.assertIn('failed/malformed book reads: **0**', text)
+        self.assertIn('one-sided or empty book snapshots (not executable): **1**', text.lower())
+        self.assertIn('unknown (not measured in completed legacy segments)', text)
+        self.assertIn('1 segments could not be completely scored', text)
 
 
 if __name__ == '__main__':
