@@ -110,7 +110,8 @@ def fund(client: KalshiClient, path: Path) -> dict:
               'source_shard': 0, 'target_shard': MLB_SHARD}
     save_stage(path, record)  # durable BEFORE irreversible POST
     result = once_post(client, '/portfolio/intra_exchange_instance_transfer',
-                       {'amount': TRANSFER_CENTICENTS, 'source_exchange_shard': 0,
+                       {'source': 'event_contract', 'destination': 'event_contract',
+                        'amount': TRANSFER_CENTICENTS, 'source_exchange_shard': 0,
                         'destination_exchange_shard': MLB_SHARD,
                         'source_subaccount': 0, 'destination_subaccount': 0})
     transfer_id = result.get('transfer_id')

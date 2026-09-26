@@ -74,6 +74,8 @@ class FundingTests(unittest.TestCase):
                 if endpoint.endswith('intra_exchange_instance_transfer'):
                     self.assertEqual(stage, 'cross_shard_submitting')
                     self.assertEqual(body['amount'], 20000)
+                    self.assertEqual((body['source'], body['destination']),
+                                     ('event_contract', 'event_contract'))
                     self.assertEqual((body['source_exchange_shard'], body['destination_exchange_shard']), (0, 3))
                     seen.append('cross')
                     return {'transfer_id': 'transfer-1234'}
