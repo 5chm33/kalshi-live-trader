@@ -137,7 +137,8 @@ def portal_station(session: requests.Session, city: str, cli: str, target: date)
     return station, document
 
 
-def nws_forecast(session: requests.Session, station: dict, target: date, received: datetime) -> dict:
+def nws_forecast(session: requests.Session, station: dict, target: date, received: datetime,
+                 receipt_fn=None) -> dict:
     icao = station['icao']
     site = get_json(session, f'{NWS_ROOT}/stations/{icao}', headers=NWS_HEADERS)
     props, geo = site.get('properties') or {}, site.get('geometry') or {}
@@ -158,10 +159,12 @@ def nws_forecast(session: requests.Session, station: dict, target: date, receive
     if not isinstance(url, str) or not url.startswith(f'{NWS_ROOT}/gridpoints/') or '?' in url:
         raise MarketDataError('Untrusted NWS forecast URL')
     document = get_json(session, url, headers=NWS_HEADERS)
+    forecast_received_at = receipt_fn() if receipt_fn is not None else datetime.now(timezone.utc)
     forecast = document.get('properties') or {}
     generated = forecast.get('generatedAt')
     periods = forecast.get('periods')
-    if not isinstance(generated, str) or not isinstance(periods, list) or parse_stamp(generated) > received:
+    if (not isinstance(generated, str) or not isinstance(periods, list)
+            or forecast_received_at < received or parse_stamp(generated) > forecast_received_at):
         raise MarketDataError('NWS forecast time absent or after decision')
     observed = {}
     for p in periods:
@@ -184,6 +187,7 @@ def nws_forecast(session: requests.Session, station: dict, target: date, receive
             [stamp(midnight.astimezone(timezone.utc) + timedelta(hours=h)) for h in range(expected)]):
         raise MarketDataError('Incomplete DST-aware NWS next-day hourly forecast')
     return {'station': site, 'point': point, 'forecast': document,
+            'forecast_received_at_utc': stamp(forecast_received_at),
             'hourly_count': expected, 'uncalibrated_grid_max_f': max(observed.values()),
             'interpretation': 'uncalibrated NWS grid forecast proxy, not a TWC/CLI settlement probability'}
 
@@ -345,6 +349,10 @@ def load_journal(path: Path) -> tuple[list[dict], dict[str, dict], set[str], boo
             if day in labels or day not in decisions or decisions[day]['type'] != 'decision_observation':
                 raise ValueError('Duplicate/unknown source/venue label')
             labels.add(day)
+        elif typ == 'decision_attempt_error':
+            day = row.get('target_date')
+            if day in decisions or day is None:
+                raise ValueError('Out-of-window or invalid attempt error')
         elif typ == 'study_end':
             ended = True
         elif typ != 'label_error':
@@ -383,15 +391,30 @@ def run(*, journal: Path, public: PublicMarketClient | None = None,
                         try:
                             row = observe(public, twc, nws, target, now)
                         except Exception as exc:
-                            row = {'type':'decision_error','observed_at_utc':stamp(now_fn()),
-                                   'target_date':key,'reason':f'{type(exc).__name__}: {str(exc)[:180]}',
-                                   'paper_orders':0,'real_orders':0,'real_fills':0}
-                        append(out,row);decisions[key]=row
-                        print(f'weather_decision utc={stamp(now_fn())} target={key} type={row["type"]} orders=0',flush=True)
+                            failure={'type':'decision_attempt_error','observed_at_utc':stamp(now_fn()),
+                                     'target_date':key,'reason':f'{type(exc).__name__}: {str(exc)[:180]}',
+                                     'paper_orders':0,'real_orders':0,'real_fills':0}
+                            append(out,failure)
+                            print(f'weather_attempt_error utc={stamp(now_fn())} target={key} '
+                                  f'reason={failure["reason"]} orders=0',flush=True)
+                        else:
+                            append(out,row);decisions[key]=row
+                            print(f'weather_decision utc={stamp(now_fn())} target={key} '
+                                  f'type={row["type"]} orders=0',flush=True)
                     elif now > c+timedelta(seconds=120):
+                        attempted = any(r.get('type') == 'decision_attempt_error' and
+                                        r.get('target_date') == key for r in records)
+                        # The bounded journal may contain new attempts since startup.
+                        if not attempted:
+                            with journal.open() as journal_reader:
+                                attempted = any('"type":"decision_attempt_error"' in line and
+                                                f'"target_date":"{key}"' in line for line in journal_reader)
                         row={'type':'decision_missed','observed_at_utc':stamp(now_fn()),
                              'target_date':key,'reason':'missed frozen 120-second cutoff',
                              'paper_orders':0,'real_orders':0,'real_fills':0}
+                        if attempted:
+                            row['type']='decision_error'
+                            row['reason']='all source attempts failed during frozen 120-second cutoff'
                         append(out,row);decisions[key]=row
                 if key in decisions and decisions[key]['type']=='decision_observation' and key not in labels:
                     # Avoid later final-data leakage into the date's captured book/forecast.
@@ -409,7 +432,12 @@ def run(*, journal: Path, public: PublicMarketClient | None = None,
             if checks%60==0:
                 print(f'weather_progress utc={stamp(now_fn())} checks={checks} '
                       f'decisions={len(decisions)} labels={len(labels)} orders=0',flush=True)
-            sleep(60)
+            remaining = [(cutoff(FIRST_TARGET + timedelta(days=i)) - now_fn()).total_seconds()
+                         for i in range((LAST_TARGET-FIRST_TARGET).days+1)
+                         if (FIRST_TARGET + timedelta(days=i)).isoformat() not in decisions]
+            nearest = min((x for x in remaining if x > 0), default=60.0)
+            in_window = any(-120 <= x <= 0 for x in remaining)
+            sleep(5.0 if in_window else min(60.0, max(0.2, nearest)))
         append(out, {'type':'study_end','observed_at_utc':stamp(now_fn()),
                      'decisions':len(decisions),'labels':len(labels),
                      'paper_orders':0,'real_orders':0,'real_fills':0})

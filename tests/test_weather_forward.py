@@ -46,17 +46,20 @@ class IdentityTests(unittest.TestCase):
         station={'properties':{'stationIdentifier':'KNYC'},
                  'geometry':{'type':'Point','coordinates':[-73.96667,40.78333]}}
         points={'properties':{'forecastHourly':'https://api.weather.gov/gridpoints/OKX/34,45/forecast/hourly'}}
-        forecast={'properties':{'generatedAt':'2026-09-26T21:00:00Z','periods':hourly}}
+        forecast={'properties':{'generatedAt':'2026-09-26T22:00:20Z','periods':hourly}}
         with patch.object(study,'get_json',side_effect=[station,points,forecast]) as request:
-            result=study.nws_forecast(Mock(),{'icao':'KNYC'},date(2026,9,27),now)
+            result=study.nws_forecast(Mock(),{'icao':'KNYC'},date(2026,9,27),now,
+                                      receipt_fn=lambda: now+timedelta(seconds=25))
             self.assertEqual(request.call_args_list[1].args[1],
                              'https://api.weather.gov/points/40.7833,-73.9667')
         self.assertEqual(result['hourly_count'],24)
+        self.assertEqual(result['forecast_received_at_utc'],'2026-09-26T22:00:25Z')
         self.assertIn('not a TWC',result['interpretation'])
         with patch.object(study,'get_json',side_effect=[station,points,{'properties':{
                 'generatedAt':'2026-09-26T21:00:00Z','periods':hourly[:-1]}}]):
             with self.assertRaisesRegex(MarketDataError,'Incomplete'):
-                study.nws_forecast(Mock(),{'icao':'KNYC'},date(2026,9,27),now)
+                study.nws_forecast(Mock(),{'icao':'KNYC'},date(2026,9,27),now,
+                                   receipt_fn=lambda: now+timedelta(seconds=25))
 
     def test_final_label_needs_matching_venue_settlement(self):
         rule=('If the maximum temperature recorded at New York City (CLINYC) for '
@@ -108,6 +111,50 @@ class IdentityTests(unittest.TestCase):
             p.write_text('\n'.join(json.dumps(x) for x in [start,row,row])+'\n');p.chmod(0o600)
             with self.assertRaisesRegex(ValueError,'Duplicate'):
                 study.load_journal(p)
+
+    def test_retry_within_cutoff_keeps_attempt_nonterminal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp)/'logs';folder.mkdir(mode=0o700)
+            journal=folder/'weather.jsonl'
+            c=study.cutoff(date(2026,9,27))
+            clock={'now':c+timedelta(seconds=10),'sleeps':0}
+            def sleeper(_):
+                clock['sleeps']+=1
+                clock['now']=c+timedelta(seconds=20) if clock['sleeps']==1 else study.DEADLINE+timedelta(seconds=1)
+            found={'type':'decision_observation','target_date':'2026-09-27',
+                   'paper_orders':0,'real_orders':0,'real_fills':0}
+            with patch.object(study,'observe',side_effect=[OSError('transient'),found]) as get:
+                result=study.run(journal=journal,public=Mock(),twc=Mock(),nws=Mock(),
+                                 now_fn=lambda:clock['now'],sleep=sleeper)
+            records=[json.loads(x) for x in journal.read_text().splitlines()]
+            self.assertEqual(get.call_count,2)
+            self.assertEqual([x['type'] for x in records],
+                             ['study_start','decision_attempt_error','decision_observation','study_end'])
+            self.assertEqual(result['decisions'],1)
+
+    def test_restart_after_attempt_retries_without_backfill(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp)/'logs';folder.mkdir(mode=0o700)
+            journal=folder/'weather.jsonl'
+            c=study.cutoff(date(2026,9,27))
+            begin={'type':'study_start','observed_at_utc':study.stamp(c-timedelta(hours=1)),
+                   'series':study.SERIES,'first_target':study.FIRST_TARGET.isoformat(),
+                   'last_target':study.LAST_TARGET.isoformat(),'until_utc':study.stamp(study.DEADLINE),
+                   'cutoff_local':'18:00 America/New_York','paper_orders':0,'real_orders':0,'real_fills':0}
+            error={'type':'decision_attempt_error','observed_at_utc':study.stamp(c+timedelta(seconds=10)),
+                   'target_date':'2026-09-27','reason':'timeout',
+                   'paper_orders':0,'real_orders':0,'real_fills':0}
+            journal.write_text('\n'.join(json.dumps(x) for x in (begin,error))+'\n');journal.chmod(0o600)
+            clock={'now':c+timedelta(seconds=20)}
+            found={'type':'decision_observation','target_date':'2026-09-27',
+                   'paper_orders':0,'real_orders':0,'real_fills':0}
+            with patch.object(study,'observe',return_value=found) as get:
+                result=study.run(journal=journal,public=Mock(),twc=Mock(),nws=Mock(),
+                                 now_fn=lambda:clock['now'],
+                                 sleep=lambda _:clock.update(now=study.DEADLINE+timedelta(seconds=1)))
+            self.assertEqual(result['decisions'],1)
+            self.assertEqual(get.call_count,1)
+            self.assertEqual([x['type'] for x in map(json.loads,journal.read_text().splitlines())].count('decision_observation'),1)
 
 
 if __name__=='__main__':
