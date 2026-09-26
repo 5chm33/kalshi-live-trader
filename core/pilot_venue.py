@@ -103,6 +103,16 @@ class ScopedVenue:
             raise VenueError("Order belongs to another subaccount or is unscoped")
         return rows
 
+    def order_by_id(self, order_id: str) -> dict:
+        if not ORDER_ID.fullmatch(order_id):
+            raise ValueError('Invalid order ID')
+        row = self.get('/portfolio/orders/' + quote(order_id, safe='')).get('order')
+        if (not isinstance(row, dict) or row.get('order_id') != order_id
+                or row.get('subaccount_number') != self.subaccount
+                or row.get('exchange_index') != MLB_SHARD):
+            raise VenueError('Direct order lookup does not prove pilot ownership')
+        return row
+
     def fills(self, ticker: str, order_id: str) -> list[dict]:
         if not TICKER.fullmatch(ticker) or not ORDER_ID.fullmatch(order_id):
             raise ValueError("Invalid ticker or order ID")

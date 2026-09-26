@@ -203,6 +203,27 @@ class PilotJournalTests(unittest.TestCase):
         self.venue.archived_orders.assert_called_once_with(self.ticker)
         self.venue.submit_ioc.assert_not_called()
 
+    def test_direct_order_id_lookup_recovers_status_list_lag(self):
+        cid = 'pilot-test-1234'
+        self.ledger.prepare(cid, self.ticker, plan('yes', 'buy', 1, D('.45')))
+        self.ledger.begin_submit(cid)
+        self.ledger.record_ack(cid, {'client_order_id': cid, 'order_id': 'live-1234',
+                                     'fill_count': '1.00', 'remaining_count': '0.00'})
+        self.venue.order_by_id.return_value = {
+            'client_order_id': cid, 'order_id': 'live-1234', 'ticker': self.ticker,
+            'book_side': 'bid', 'yes_price_dollars': '.45',
+            'initial_count_fp': '1.00', 'fill_count_fp': '1.00',
+            'remaining_count_fp': '0.00', 'status': 'executed',
+            'subaccount_number': 1, 'exchange_index': 3}
+        self.venue.fills.return_value = [{
+            'fill_id': 'fill-1234', 'order_id': 'live-1234', 'count_fp': '1.00',
+            'yes_price_dollars': '.45', 'fee_cost': '.01',
+            'subaccount_number': 1, 'exchange_index': 3}]
+        self.venue.positions.return_value = [{'ticker': self.ticker, 'position_fp': '1.00'}]
+        self.assertEqual(reconcile_one(self.venue, self.ledger, cid)['confirmed_fill_count'], '1.00')
+        self.venue.order_by_id.assert_called_once_with('live-1234')
+        self.venue.archived_orders.assert_not_called()
+
 
 class CandidateTests(unittest.TestCase):
     def test_wrong_shard_or_thin_book_never_becomes_a_candidate(self):

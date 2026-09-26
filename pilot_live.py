@@ -149,6 +149,11 @@ def reconcile_one(venue: ScopedVenue, ledger: OrderLedger, client_id: str) -> di
     orders = [row for status in ('resting', 'executed', 'canceled')
               for row in venue.orders(status=status, ticker=ticker)
               if row.get('client_order_id') == client_id]
+    if not orders and snapshot['order_id']:
+        try:
+            orders = [venue.order_by_id(snapshot['order_id'])]
+        except VenueError:
+            pass  # A signed status list or historical record may still prove it.
     archived_only = not orders
     if not orders:
         orders = [row for row in venue.archived_orders(ticker)
