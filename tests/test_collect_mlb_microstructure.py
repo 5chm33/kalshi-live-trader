@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock
 
-from collect_mlb_microstructure import discover, event_markets, load_journal, open_private_journal, scan_selected
+from collect_mlb_microstructure import collect, discover, event_markets, load_journal, open_private_journal, scan_selected
 from core.public_market import MarketDataError
 from tests.test_microstructure import market, book, RULE
 
@@ -50,7 +50,9 @@ class MLBCollectorTests(unittest.TestCase):
         self.assertFalse(selected)
         self.assertIn('event_excluded', self.path.read_text())
 
-    def test_no_backfill_for_game_within_initial_hour(self):
+    def test_late_discovery_rejected_despite_old_study_registration(self):
+        # Study registered yesterday, but this is the FIRST sighting of a
+        # 23:15 UTC game. A 22:50 discovery has only 25 minutes of lead time.
         with open_private_journal(self.path) as file:
             selected = discover(self.client, file, datetime(2026, 9, 26, 22, 50, tzinfo=timezone.utc), {}, self.series)
         self.assertEqual(selected, {})
@@ -70,6 +72,20 @@ class MLBCollectorTests(unittest.TestCase):
                                      'scheduled_start_utc': '2026-09-26T23:15:00Z'}) + '\n')
         with self.assertRaisesRegex(ValueError, 'First journal row'):
             load_journal(self.path)
+
+    def test_completed_study_does_not_append_second_end(self):
+        registration = {'type': 'study_start', 'start_at_utc': '2026-09-26T07:00:00Z',
+                        'until_utc': '2026-09-27T07:00:00Z', 'series_ticker': 'KXMLBGAME',
+                        'max_events': 120, 'order_writes_enabled': False}
+        with open_private_journal(self.path) as output:
+            output.write(json.dumps(registration) + '\n')
+            output.write(json.dumps({'type': 'study_end', 'real_orders': 0}) + '\n')
+        original = self.path.read_text()
+        result = collect(until=datetime(2026, 9, 27, 7, tzinfo=timezone.utc),
+                         journal=self.path, client=self.client, sleep=lambda _: None)
+        self.assertTrue(result['already_completed'])
+        self.assertEqual(self.path.read_text(), original)
+        self.client.get_series.assert_not_called()
 
 
 if __name__ == '__main__':

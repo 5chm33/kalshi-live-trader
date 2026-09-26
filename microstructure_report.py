@@ -33,6 +33,7 @@ def summarize(rows, as_of=None):
     starts, endings = [], []
     selected, samples, settled = {}, defaultdict(list), {}
     errors = Counter()
+    snapshot_count = 0
     for row in rows:
         kind = row.get("type")
         if kind == "study_start":
@@ -47,7 +48,13 @@ def summarize(rows, as_of=None):
         elif kind == "book_snapshot":
             if row.get("real_orders") != 0 or row.get("real_fills") != 0:
                 raise ValueError("Journal contains claimed real orders or fills")
-            samples[row["event_ticker"]].append(row)
+            ticker = row["event_ticker"]
+            if ticker not in selected:
+                raise ValueError("Snapshot predates or is outside original cohort")
+            snapshot_count += 1
+            anchor = moment(selected[ticker]["scheduled_start_utc"]) - timedelta(minutes=30)
+            if abs((moment(row["sample_at_utc"]) - anchor).total_seconds()) <= 35:
+                samples[ticker].append(row)
         elif kind == "event_settlement":
             ticker = row["event_ticker"]
             if ticker in settled:
@@ -103,7 +110,7 @@ def summarize(rows, as_of=None):
              f"- Fixed study deadline: {starts[0]['until_utc']}",
              f"- Complete study-end record present: {bool(endings)}",
              f"- Distinct future selected games: **{n}/120**",
-             f"- Actual book snapshots: {sum(map(len, samples.values()))}",
+             f"- Actual book snapshots: {snapshot_count}",
              f"- Games with a valid nearest-30-minute two-sided decision snapshot: **{decision_eligible}**",
              f"- Games with 60-second persistence at fixed ±30-second slots: **{persistent}/120**",
              f"- Games with conditional non-direct-member paired mark ≥ $0.01: **{fee_surviving}/120**",

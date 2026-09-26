@@ -21,6 +21,17 @@ class MicrostructureReportTests(unittest.TestCase):
         result = summarize([start, event], as_of=datetime(2026, 9, 26, 7, tzinfo=timezone.utc))
         self.assertIn('Future decision times not yet reached: 1; missing after due: 0', result)
 
+    def test_off_window_book_does_not_replace_missing_decision(self):
+        start = {'type': 'study_start', 'start_at_utc': '2026-09-26T00:00:00Z',
+                 'until_utc': '2026-10-02T00:00:00Z'}
+        event = {'type': 'event_selected', 'event_ticker': 'X',
+                 'scheduled_start_utc': '2026-09-26T23:15:00Z'}
+        book = {'type': 'book_snapshot', 'event_ticker': 'X', 'sample_at_utc': '2026-09-26T22:15:00Z',
+                'real_orders': 0, 'real_fills': 0, 'conditional_quote': {'eligible': True}}
+        result = summarize(iter([start, event, book] * 1), as_of=datetime(2026, 9, 27, tzinfo=timezone.utc))
+        self.assertIn('Actual book snapshots: 1', result)
+        self.assertIn('missing after due: 1', result)
+
     def test_many_snapshots_are_one_game_and_no_fills(self):
         rows = [{'type': 'study_start', 'start_at_utc': '2026-09-26T00:00:00Z',
                  'until_utc': '2026-10-02T00:00:00Z'},

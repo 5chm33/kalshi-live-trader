@@ -53,9 +53,10 @@ def load_journal(path: Path):
     starts = []
     selected = {}
     settled = set()
+    ended = False
     records = 0
     if not path.exists():
-        return starts, selected, settled
+        return starts, selected, settled, ended
     if path.is_symlink() or path.stat().st_mode & 0o077:
         raise PermissionError("Existing journal is insecure")
     with path.open() as stream:
@@ -64,6 +65,8 @@ def load_journal(path: Path):
             continue
         row = json.loads(line)
         records += 1
+        if ended:
+            raise ValueError("Rows appended after original study end")
         if records == 1 and row.get("type") != "study_start":
             raise ValueError("First journal row must be original registration")
         if row.get("type") == "study_start":
@@ -84,9 +87,13 @@ def load_journal(path: Path):
             if not starts or row["event_ticker"] not in selected or row["event_ticker"] in settled:
                 raise ValueError("Unselected or duplicated event settlement")
             settled.add(row["event_ticker"])
+        if row.get("type") == "study_end":
+            if not starts:
+                raise ValueError("Unregistered study cannot end")
+            ended = True
     if (records and not starts) or len(starts) > 1 or len(selected) > MAX_EVENTS:
         raise ValueError("Corrupt or duplicated study start/universe")
-    return starts, selected, settled
+    return starts, selected, settled, ended
 
 
 def event_markets(event):
@@ -102,8 +109,8 @@ def event_markets(event):
     return start, sorted(markets, key=lambda m: m["ticker"])
 
 
-def discover(client, file, started, selected, series):
-    """Choose first future events chronologically, retain every no-quote trial."""
+def discover(client, file, discovered_at, selected, series):
+    """Choose only events seen at least an hour before their binding start."""
     rows = client.get_markets(series_ticker=SERIES, status="open", limit=200)
     event_ids = sorted({m.get("event_ticker") for m in rows if isinstance(m, dict)
                         and isinstance(m.get("event_ticker"), str)})
@@ -114,7 +121,7 @@ def discover(client, file, started, selected, series):
         try:
             event = client.get_event(ticker)
             start, markets = event_markets(event)
-            if start < started + timedelta(minutes=60):
+            if start < discovered_at + timedelta(minutes=60):
                 continue  # never backfill a game without the prescribed hour
             effective_fees(series, event)
             candidates.append((start, ticker, event, markets))
@@ -204,7 +211,7 @@ def collect(*, until: datetime, journal: Path, interval: float = 10.0,
         raise ValueError("Invalid UTC deadline or intervals")
     with open_private_journal(journal) as output:
         fcntl.flock(output.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        starts, selected, settled = load_journal(journal)
+        starts, selected, settled, ended = load_journal(journal)
         started = (datetime.fromisoformat(starts[0]["start_at_utc"].replace("Z", "+00:00"))
                    if starts else now_utc())
         if not starts:
@@ -218,6 +225,9 @@ def collect(*, until: datetime, journal: Path, interval: float = 10.0,
             raise ValueError("Study deadline extended after original start")
         if starts and starts[0].get("until_utc") != iso(until):
             raise ValueError("Study deadline differs from its immutable original record")
+        if ended:
+            return {"events_selected": len(selected), "cycles": 0,
+                    "real_orders": 0, "already_completed": True}
         client = client or PublicMarketClient()
         last_discovery = 0.0
         last_settlement_check = 0.0
@@ -229,7 +239,7 @@ def collect(*, until: datetime, journal: Path, interval: float = 10.0,
             try:
                 if series is None or t0 - last_discovery >= discover_interval:
                     series = client.get_series(SERIES)
-                    selected = discover(client, output, started, selected, series)
+                    selected = discover(client, output, now, selected, series)
                     last_discovery = t0
                 count = scan_selected(client, output, selected, series, now)
                 if t0 - last_settlement_check >= 900:
