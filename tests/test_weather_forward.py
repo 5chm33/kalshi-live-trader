@@ -44,11 +44,13 @@ class IdentityTests(unittest.TestCase):
         hourly=[{'startTime':study.stamp(start+timedelta(hours=i)),
                  'temperature':67+i%6,'temperatureUnit':'F'} for i in range(24)]
         station={'properties':{'stationIdentifier':'KNYC'},
-                 'geometry':{'type':'Point','coordinates':[-73.97,40.78]}}
+                 'geometry':{'type':'Point','coordinates':[-73.96667,40.78333]}}
         points={'properties':{'forecastHourly':'https://api.weather.gov/gridpoints/OKX/34,45/forecast/hourly'}}
         forecast={'properties':{'generatedAt':'2026-09-26T21:00:00Z','periods':hourly}}
-        with patch.object(study,'get_json',side_effect=[station,points,forecast]):
+        with patch.object(study,'get_json',side_effect=[station,points,forecast]) as request:
             result=study.nws_forecast(Mock(),{'icao':'KNYC'},date(2026,9,27),now)
+            self.assertEqual(request.call_args_list[1].args[1],
+                             'https://api.weather.gov/points/40.7833,-73.9667')
         self.assertEqual(result['hourly_count'],24)
         self.assertIn('not a TWC',result['interpretation'])
         with patch.object(study,'get_json',side_effect=[station,points,{'properties':{

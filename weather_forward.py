@@ -130,7 +130,11 @@ def nws_forecast(session: requests.Session, station: dict, target: date, receive
     lon, lat = coords[:2]
     if not isinstance(lat, (float, int)) or not isinstance(lon, (float, int)) or not -90 <= lat <= 90 or not -180 <= lon <= 180:
         raise MarketDataError('Invalid NWS station coordinates')
-    point = get_json(session, f'{NWS_ROOT}/points/{lat},{lon}', headers=NWS_HEADERS)
+    # NWS redirects /points/40.78333,-73.96667 to its documented four-decimal
+    # canonical /points/40.7833,-73.9667. Normalize the station-derived value
+    # instead of following any unexpected HTTP redirect or changing host.
+    point = get_json(session, f'{NWS_ROOT}/points/{round(lat, 4)},{round(lon, 4)}',
+                     headers=NWS_HEADERS)
     url = (point.get('properties') or {}).get('forecastHourly')
     if not isinstance(url, str) or not url.startswith(f'{NWS_ROOT}/gridpoints/') or '?' in url:
         raise MarketDataError('Untrusted NWS forecast URL')
