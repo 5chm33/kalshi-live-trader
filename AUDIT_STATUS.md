@@ -64,6 +64,8 @@ No Kalshi backtest server is required. Tests mock all requests. The observation 
 
 **Live account clarification, 2026-09-26 19:58 UTC (12:58 PDT):** an authenticated read-only preflight confirmed **zero resting orders** and `trading_enabled=false`; the user is correct that the account has received **no bot trades**. The public pregame study had **1,739 genuine book snapshots**, **five valid first-pitch-minus-30-minute game decisions**, and each conditional two-leg mark was **−$0.01** after the current fee estimate. The sixth decision, NYM–WSH, is *missing*, not a zero or a win: both Kalshi winner markets were subsequently confirmed `finalized`; 182 consecutive observations had been logged as `book_error` for this unavailable market. Future finalized ticks now log `book_ineligible`, never request a book, and never count as a tradeable sample; existing error records are preserved. Separately, **two** real-data, depth-qualified score-change candidates had later hypothetical executable exit quotes: **−$0.03** and **−$0.04** per contract after estimated fees, assuming an entry fill that did *not* occur. These were not actual losses or fills. No positive edge or realized bot profit is established. The five valid original observations and the missing sixth keep their original preregistered classifications.
 
+**Separate user-approved $2 execution-quality pilot, 2026-09-26 21:09–21:20 UTC:** after an independent adversarial review, the experimental writer was isolated from the disabled `main.py`, confined to a new numbered shard-3 subaccount with **exactly $2**, capped to **one one-contract YES entry** at ≤$0.50, and required a newly subscribed authenticated venue WebSocket book to match a separate REST book. The exchange accepted and filled **one entry**. Its first reconciliation failed closed because the order-list GET temporarily lagged; signed GETs then proved one actual order/fill/position, and the original durable journal was recovered without another entry. The bounded monitor submitted **one reduce-only IOC exit**, which filled. Independent signed venue GETs verified **two terminal orders, two fills, no resting order, zero position, and a realized loss of $0.0276 inclusive of both actual fees**. The numbered account finished with **$1.9724 cash**, and both transient trading services stopped with no restart policy. A direct signed order-by-ID fallback was subsequently added and tested to avoid this particular list-index lag. **One closed losing pilot is not evidence of profitability**; do not reactivate trading or scale this strategy on that basis. Detailed identifiers and the private reconciliation remain outside Git.
+
 ## Operating options
 
 | Approach | Tradeoffs | Cost | Setup Complexity |
@@ -71,7 +73,7 @@ No Kalshi backtest server is required. Tests mock all requests. The observation 
 | Bounded read-only scans in this temporary environment | Immediate evidence and local JSONL; stops after requested cycles, cannot run unattended forever | No exchange orders/fees; no hosting purchase | Low |
 | Same observer on your own always-on machine | Durable local logs and control, but the computer must stay powered on; still **no live orders** | No additional hosted-service charge; your electricity/internet | Medium |
 
-An always-on hosted trader is premature while strategy validation and exit reconciliation remain blocked. This temporary sandbox is not durable hosting.
+An always-on profit-seeking trader remains premature: a separate capped execution-quality pilot verified the mechanics but **lost money**. This temporary sandbox is not durable hosting.
 
 ## Independent API references
 
@@ -80,9 +82,9 @@ An always-on hosted trader is premature while strategy validation and exit recon
 - [Positions](https://docs.kalshi.com/api-reference/portfolio/get-positions), [Fills](https://docs.kalshi.com/api-reference/portfolio/get-fills), and [Orders](https://docs.kalshi.com/api-reference/orders/get-orders) have separate cursors/state.
 - [Rate limits](https://docs.kalshi.com/getting_started/rate_limits) use token buckets, not a fixed 20/30 requests-per-second promise.
 - [Fee schedule](https://kalshi.com/fee-schedule) has series-specific exemptions/fees; fee estimates are not authoritative actual charge records.
-- [WebSocket connection](https://docs.kalshi.com/websockets/websocket-connection) requires signed API key **headers during the handshake**. An earlier assumption that a query-parameter key was necessary was not supported by current docs; no WebSocket subscriber is implemented here.
+- [WebSocket connection](https://docs.kalshi.com/websockets/websocket-connection) requires signed API key **headers during the handshake**. The experimental pilot successfully connected, received a sequenced snapshot, and cross-checked the REST book; it does not claim the exchange snapshot has a venue timestamp or guarantee future liquidity.
 
-## Next gate before any `$10` live experiment
+## Next gate before any additional live experiment or scaling
 
 1. Keep credentials private and least-privileged; verify current cash, existing positions, orders, and all relevant fills **continuously** against the exchange, including restart and stale-data behavior. One read-only snapshot is insufficient. Never commit keys or paste them in an issue/PR.
 2. Build persistent, idempotent order/fill accounting and tested, reliable exits for both sides; enforce an exchange-reconciled **absolute $10 maximum total loss/exposure**, lower per-trade cap, max orders/day, and a kill switch.
