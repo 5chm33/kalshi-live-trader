@@ -20,7 +20,7 @@ jobs:
       - name: Run offline tests
         run: python audit_integration.py
       - name: Compile source
-        run: python -m compileall -q core strategies main.py account_preflight.py account_performance.py account_limits.py position_watch.py shadow_performance.py reconcile_journal.py observe_30m.py summarize_monitor.py collect_shadow.py forward_evidence.py collect_mlb_microstructure.py microstructure_report.py audit_weather_sources.py weather_forward.py weather_forward_report.py pilot_live.py fund_pilot.py tests scripts
+        run: python -m compileall -q core strategies main.py account_preflight.py account_performance.py account_limits.py position_watch.py shadow_performance.py reconcile_journal.py observe_30m.py summarize_monitor.py collect_shadow.py forward_evidence.py collect_mlb_microstructure.py microstructure_report.py audit_weather_sources.py weather_forward.py weather_forward_report.py weather_calibration.py weather_calibration_report.py pilot_live.py fund_pilot.py tests scripts
       - name: Probe Kalshi public API with strict TLS (informational)
         continue-on-error: true
         run: |
