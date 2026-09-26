@@ -1,5 +1,6 @@
 """Synthetic journal records are test fixtures, never trading-performance evidence."""
 import unittest
+from datetime import datetime, timezone
 from microstructure_report import summarize
 
 
@@ -11,6 +12,14 @@ class MicrostructureReportTests(unittest.TestCase):
         self.assertIn('0/120', report)
         self.assertIn('realized bot P&L: undefined', report)
         self.assertIn('not met or incomplete', report)
+
+    def test_future_game_has_pending_not_missing_decision(self):
+        start = {'type': 'study_start', 'start_at_utc': '2026-09-26T00:00:00Z',
+                 'until_utc': '2026-10-02T00:00:00Z'}
+        event = {'type': 'event_selected', 'event_ticker': 'X',
+                 'scheduled_start_utc': '2026-09-26T23:15:00Z'}
+        result = summarize([start, event], as_of=datetime(2026, 9, 26, 7, tzinfo=timezone.utc))
+        self.assertIn('Future decision times not yet reached: 1; missing after due: 0', result)
 
     def test_many_snapshots_are_one_game_and_no_fills(self):
         rows = [{'type': 'study_start', 'start_at_utc': '2026-09-26T00:00:00Z',

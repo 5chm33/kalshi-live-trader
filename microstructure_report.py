@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -28,7 +28,8 @@ def valid_sample(sample, target):
     return abs((after[0] - after[1]).total_seconds()) <= 2
 
 
-def summarize(rows):
+def summarize(rows, as_of=None):
+    as_of = as_of or datetime.now(timezone.utc)
     starts, endings = [], []
     selected, samples, settled = {}, defaultdict(list), {}
     errors = Counter()
@@ -67,7 +68,7 @@ def summarize(rows):
                   if abs((moment(s["sample_at_utc"]) - anchor).total_seconds()) <= 5
                   and valid_sample(s, anchor)]
         if not nearby:
-            statuses["missing_fixed_decision_snapshot"] += 1
+            statuses["future_decision_pending" if anchor > as_of else "missing_fixed_decision_snapshot"] += 1
             continue
         decision = min(nearby, key=lambda s: (abs((moment(s["sample_at_utc"]) - anchor).total_seconds()), s["sample_at_utc"]))
         if decision.get("conditional_quote", {}).get("eligible") is not True:
@@ -109,7 +110,7 @@ def summarize(rows):
              f"- Games meeting both fixed gates: **{persistent_and_fee}/120**",
              f"- Later settled games: {len(settled)}; exceptional or nonbinary payouts: {outcome_exceptions}",
              f"- Logged book/cycle/settlement errors: {dict(errors)}",
-             f"- Missing fixed-time snapshots: {statuses['missing_fixed_decision_snapshot']}; one-sided/thin/invalid: {statuses['one_sided_thin_or_ineligible']}",
+             f"- Future decision times not yet reached: {statuses['future_decision_pending']}; missing after due: {statuses['missing_fixed_decision_snapshot']}; one-sided/thin/invalid: {statuses['one_sided_thin_or_ineligible']}",
              "- **Bot orders: 0; bot fills: 0; realized bot P&L: undefined.**",
              "", "**Feasibility screen:** " + ("basic displayed-book conditions met; still not a profitable trading result." if adequate
                       else "not met or incomplete; no basis to start trading."),
