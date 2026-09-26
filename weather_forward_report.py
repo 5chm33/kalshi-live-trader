@@ -15,7 +15,9 @@ def render(journal: Path) -> str:
                        or row.get('real_fills') != 0 for row in rows):
         raise ValueError('Journal claims trading activity; not a public-only study')
     final_rows = {row['target_date']: row for row in rows
-                  if row.get('type') == 'source_and_venue_label'}
+                  if row.get('type') == 'source_and_venue_label' and row['target_date'] in labels}
+    revisions = {row['target_date'] for row in rows
+                 if row.get('type') == 'source_revision_or_disagreement'}
     observed = [row for row in decisions.values() if row['type'] == 'decision_observation']
     lines = ['# Daily-temperature forward study — public data only', '',
              '**Not a trading-performance report.** No live or paper order was sent; quote snapshots do not establish fills, and the NWS grid maximum is an uncalibrated predictor, not a settlement probability.', '',
@@ -40,7 +42,10 @@ def render(journal: Path) -> str:
             settled='Yes'
         usable=sum(1 for b in row['books'] if b.get('quote') is not None and
                    Decimal(b['quote']['yes_ask_size_fp']) >= 1)
-        lines.append(f'| {key} | captured | {forecast} | {source_value} | {settled} | {usable}/{len(row["books"])} one-contract YES asks displayed; not fills |')
+        note=f'{usable}/{len(row["books"])} one-contract YES asks displayed; not fills'
+        if key in revisions:
+            note += '; source revision or disagreement UNRESOLVED'
+        lines.append(f'| {key} | captured | {forecast} | {source_value} | {settled} | {note} |')
     if not decisions:
         lines.append('| — | Waiting for first registered cutoff | — | — | No | — |')
     lines += ['', '**Interpretation:** At least 30 complete source-matched days are needed before freezing any probability calibration rule, followed by at least 30 new out-of-sample dates; neither threshold proves future profitability. TWC revisions, market-rule changes, or missing books remain visible, not backfilled.', '',

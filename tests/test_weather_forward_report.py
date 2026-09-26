@@ -50,5 +50,21 @@ class WeatherReportTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 render(self.journal(d,[start,decision]))
 
+    def test_later_source_revision_invalidates_prior_confirmation(self):
+        with tempfile.TemporaryDirectory() as d:
+            start,decision=self.sample()
+            label={'type':'source_and_venue_label','target_date':'2026-09-27',
+                   'twc_station_row':{'data':{'maxTemp':69},'status':'official'},
+                   'venue_settlements':[{'ticker':'one','result':'yes'}],
+                   'paper_orders':0,'real_orders':0,'real_fills':0}
+            revision={'type':'source_revision_or_disagreement','target_date':'2026-09-27',
+                      'previous_label':label,
+                      'current_source_snapshot':{'row':{'data':{'maxTemp':70},'status':'revised'}},
+                      'paper_orders':0,'real_orders':0,'real_fills':0}
+            text=render(self.journal(d,[start,decision,label,revision]))
+        self.assertIn('double-confirmed final labels: 0',text)
+        self.assertIn('source revision or disagreement UNRESOLVED',text)
+        self.assertIn('| 2026-09-27 | captured | 70 | — | No |',text)
+
 if __name__=='__main__':
     unittest.main()

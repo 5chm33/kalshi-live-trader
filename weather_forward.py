@@ -303,6 +303,18 @@ def label(client: PublicMarketClient, twc: requests.Session, decision: dict) -> 
             'projected_profit': None}
 
 
+def revision_source_snapshot(twc: requests.Session, day: str, cli: str) -> dict:
+    """Archive the current public source row without pretending a changed row agrees with venue."""
+    report = get_json(twc, SOURCE_URL, params={'date':day}, headers=TWC_HEADERS)
+    if report.get('date') != day or not isinstance(report.get('results'), list):
+        raise MarketDataError('TWC revision source date/schema mismatch')
+    matches = [row for row in report['results'] if isinstance(row, dict) and
+               isinstance(row.get('station'), dict) and row['station'].get('cliId') == cli]
+    if len(matches) != 1:
+        raise MarketDataError('TWC revised source station absent/ambiguous')
+    return {'source':report.get('source'), 'row':matches[0]}
+
+
 def append(stream, record: dict) -> None:
     stream.write(json.dumps(record, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n')
     stream.flush()
@@ -349,6 +361,11 @@ def load_journal(path: Path) -> tuple[list[dict], dict[str, dict], set[str], boo
             if day in labels or day not in decisions or decisions[day]['type'] != 'decision_observation':
                 raise ValueError('Duplicate/unknown source/venue label')
             labels.add(day)
+        elif typ == 'source_revision_or_disagreement':
+            day = row.get('target_date')
+            if day not in labels or day not in decisions:
+                raise ValueError('Revision lacks an earlier confirmed source/venue label')
+            labels.remove(day)
         elif typ == 'decision_attempt_error':
             day = row.get('target_date')
             if day in decisions or day is None:
@@ -416,18 +433,62 @@ def run(*, journal: Path, public: PublicMarketClient | None = None,
                             row['type']='decision_error'
                             row['reason']='all source attempts failed during frozen 120-second cutoff'
                         append(out,row);decisions[key]=row
-                if key in decisions and decisions[key]['type']=='decision_observation' and key not in labels:
+                if key in decisions and decisions[key]['type']=='decision_observation':
                     # Avoid later final-data leakage into the date's captured book/forecast.
-                    if now.astimezone(LOCAL_TZ).date()>target and checks%180==0:
+                    # Revisit successful labels daily until the registered tail;
+                    # revisions invalidate them instead of being silently lost.
+                    original_label = next((r for r in reversed(records) if
+                                           r.get('type') == 'source_and_venue_label' and
+                                           r.get('target_date') == key), None)
+                    if (now.astimezone(LOCAL_TZ).date()>target and
+                            ((key not in labels and original_label is None and checks%180==0) or
+                             (key in labels and checks%1440==0))):
                         try:
                             resolved=label(public, twc, decisions[key])
-                            if resolved is not None:
+                            if resolved is not None and key not in labels:
                                 append(out,resolved);labels.add(key)
+                                records.append(resolved)
                                 print(f'weather_label utc={stamp(now_fn())} target={key} source_and_venue_verified=True',flush=True)
+                            elif key in labels:
+                                old = (original_label.get('twc_station_row'),
+                                       original_label.get('venue_settlements'))
+                                new = ((resolved or {}).get('twc_station_row'),
+                                       (resolved or {}).get('venue_settlements'))
+                                if old != new:
+                                    try:
+                                        source_snapshot = revision_source_snapshot(
+                                            twc,key,decisions[key]['station_from_prior_final_TWC_report']['cliId'])
+                                    except Exception as source_exc:
+                                        source_snapshot = {'unavailable':f'{type(source_exc).__name__}: {str(source_exc)[:120]}'}
+                                    revision={'type':'source_revision_or_disagreement',
+                                              'observed_at_utc':stamp(now_fn()),
+                                              'target_date':key,'previous_label':original_label,
+                                              'new_label_or_null':resolved,
+                                              'current_source_snapshot':source_snapshot,
+                                              'reason':'Previously confirmed source/venue observation changed or became nonfinal',
+                                              'paper_orders':0,'real_orders':0,'real_fills':0}
+                                    append(out,revision);records.append(revision);labels.remove(key)
+                                    print(f'weather_revision utc={stamp(now_fn())} target={key} label_unresolved=True',flush=True)
                         except Exception as exc:
-                            append(out,{'type':'label_error','observed_at_utc':stamp(now_fn()),
-                                        'target_date':key,'reason':f'{type(exc).__name__}: {str(exc)[:160]}',
-                                        'paper_orders':0,'real_orders':0,'real_fills':0})
+                            reason=f'{type(exc).__name__}: {str(exc)[:160]}'
+                            if key in labels and ('disagrees with venue settlement' in reason or
+                                                   'Venue settlement market set changed' in reason or
+                                                   'rule changed' in reason):
+                                try:
+                                    source_snapshot = revision_source_snapshot(
+                                        twc,key,decisions[key]['station_from_prior_final_TWC_report']['cliId'])
+                                except Exception as source_exc:
+                                    source_snapshot = {'unavailable':f'{type(source_exc).__name__}: {str(source_exc)[:120]}'}
+                                revision={'type':'source_revision_or_disagreement',
+                                          'observed_at_utc':stamp(now_fn()),'target_date':key,
+                                          'previous_label':original_label,'new_label_or_null':None,
+                                          'current_source_snapshot':source_snapshot,
+                                          'reason':reason,'paper_orders':0,'real_orders':0,'real_fills':0}
+                                append(out,revision);records.append(revision);labels.remove(key)
+                            else:
+                                append(out,{'type':'label_error','observed_at_utc':stamp(now_fn()),
+                                            'target_date':key,'reason':reason,
+                                            'paper_orders':0,'real_orders':0,'real_fills':0})
             checks+=1
             if checks%60==0:
                 print(f'weather_progress utc={stamp(now_fn())} checks={checks} '
