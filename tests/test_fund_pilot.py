@@ -47,6 +47,54 @@ class FundingTests(unittest.TestCase):
                 fund(client, Path(temp) / 'funding.json')
             post.assert_not_called()
 
+    def test_exact_three_step_funding_no_cross_shard_retry(self):
+        client = Mock()
+        client.get_api_limits.return_value = {'usage_tier': 'advanced'}
+        with tempfile.TemporaryDirectory() as temp, patch('fund_pilot.private_get') as get, \
+                patch('fund_pilot.balance') as balance, patch('fund_pilot.once_post') as post, \
+                patch('fund_pilot.time.sleep'):
+            path = Path(temp) / 'funding.json'
+            get.side_effect = lambda c, endpoint: (
+                {'subaccount_balances': [{'subaccount_number': 0}]} if 'balances' in endpoint else
+                {'transfer': {'transfer_id': 'transfer-1234', 'status': 'completed'}})
+            seen = []
+
+            def current_cash(_client, sub, shard):
+                if (sub, shard) == (0, 0):
+                    return D('10.00')
+                if (sub, shard) == (0, 3):
+                    count = sum(1 for x in seen if x == 'cross')
+                    return D('2.00') if count == 1 and 'sub' not in seen else D(0)
+                if (sub, shard) == (1, 3):
+                    return D('2.00') if 'sub' in seen else D(0)
+                self.fail('Unexpected account/shard read')
+
+            def single_write(_client, endpoint, body):
+                stage = json.loads(path.read_text())['stage']
+                if endpoint.endswith('intra_exchange_instance_transfer'):
+                    self.assertEqual(stage, 'cross_shard_submitting')
+                    self.assertEqual(body['amount'], 20000)
+                    self.assertEqual((body['source_exchange_shard'], body['destination_exchange_shard']), (0, 3))
+                    seen.append('cross')
+                    return {'transfer_id': 'transfer-1234'}
+                if endpoint.endswith('subaccounts'):
+                    self.assertEqual(stage, 'create_subaccount_submitting')
+                    self.assertEqual(body, {'exchange_index': 3})
+                    seen.append('create')
+                    return {'subaccount_number': 1}
+                self.assertEqual(stage, 'subaccount_transfer_submitting')
+                self.assertEqual(body['amount_cents'], 200)
+                self.assertEqual(body['exchange_index'], 3)
+                seen.append('sub')
+                return {}
+
+            balance.side_effect = current_cash
+            post.side_effect = single_write
+            self.assertEqual(fund(client, path)['stage'], 'funded')
+            self.assertEqual(seen, ['cross', 'create', 'sub'])
+            self.assertEqual(fund(client, path)['subaccount'], 1)
+            self.assertEqual(seen, ['cross', 'create', 'sub'])
+
 
 if __name__ == '__main__':
     unittest.main()

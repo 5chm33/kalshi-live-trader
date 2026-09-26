@@ -89,6 +89,8 @@ class PilotJournalTests(unittest.TestCase):
         self.venue.cash.return_value = D('2.00')
         self.venue.positions.return_value = []
         self.venue.orders.return_value = []
+        self.venue.archived_orders.return_value = []
+        self.venue.archived_fills.return_value = []
         self.ticker = 'KXMLBGAME-TEST-TEAM'
 
     def tearDown(self):
@@ -142,6 +144,64 @@ class PilotJournalTests(unittest.TestCase):
         with self.assertRaisesRegex(VenueError, 'Cannot uniquely recover'):
             reconcile_one(self.venue, self.ledger, cid)
         self.assertEqual(self.ledger.snapshot(cid)['phase'], 'uncertain')
+
+    def test_half_filled_entry_allows_only_owned_fractional_exit(self):
+        entry_id = 'pilot-test-1234'
+        self.ledger.prepare(entry_id, self.ticker, plan('yes', 'buy', 1, D('.45')))
+        self.ledger.begin_submit(entry_id)
+        self.ledger.record_ack(entry_id, {'client_order_id': entry_id, 'order_id': 'entry-1234',
+                                          'fill_count': '0.50', 'remaining_count': '0.00'})
+        entry_order = {'client_order_id': entry_id, 'order_id': 'entry-1234',
+                       'ticker': self.ticker, 'book_side': 'bid', 'yes_price_dollars': '.45',
+                       'initial_count_fp': '1.00', 'fill_count_fp': '.50',
+                       'remaining_count_fp': '0.00', 'status': 'canceled',
+                       'subaccount_number': 1, 'exchange_index': 3}
+        entry_fill = {'fill_id': 'entry-fill-1234', 'order_id': 'entry-1234',
+                      'count_fp': '.50', 'yes_price_dollars': '.45', 'fee_cost': '.01',
+                      'subaccount_number': 1, 'exchange_index': 3}
+        self.venue.orders.side_effect = lambda **kwargs: [entry_order] if kwargs['status'] == 'canceled' else []
+        self.venue.fills.return_value = [entry_fill]
+        self.venue.positions.return_value = [{'ticker': self.ticker, 'position_fp': '.50'}]
+        self.assertEqual(reconcile_one(self.venue, self.ledger, entry_id)['phase'], 'reconcile')
+        self.venue.submit_ioc.side_effect = lambda payload: {
+            'client_order_id': payload['client_order_id'],
+            'order_id': 'exit-1234', 'fill_count': '.25', 'remaining_count': '0.00'}
+        exit_id = submit_one(self.venue, self.ledger, self.ticker, D('.47'),
+                             action='sell', quantity=D('.50'),
+                             verified_position_size=D('.50'))
+        self.assertEqual(self.venue.submit_ioc.call_args.args[0]['count'], '0.50')
+        self.assertTrue(self.venue.submit_ioc.call_args.args[0]['reduce_only'])
+        exit_order = dict(entry_order, client_order_id=exit_id, order_id='exit-1234',
+                          book_side='ask', yes_price_dollars='.47',
+                          initial_count_fp='.50', fill_count_fp='.25')
+        exit_fill = dict(entry_fill, fill_id='exit-fill-1234', order_id='exit-1234',
+                         count_fp='.25', yes_price_dollars='.47')
+        self.venue.orders.side_effect = lambda **kwargs: [exit_order] if kwargs['status'] == 'canceled' else []
+        self.venue.fills.return_value = [exit_fill]
+        self.venue.positions.return_value = [{'ticker': self.ticker, 'position_fp': '.25'}]
+        self.assertEqual(reconcile_one(self.venue, self.ledger, exit_id)['phase'], 'partial_verified')
+        self.venue.submit_ioc.side_effect = lambda payload: {
+            'client_order_id': payload['client_order_id'],
+            'order_id': 'exit-5678', 'fill_count': '.25', 'remaining_count': '0.00'}
+        second_id = submit_one(self.venue, self.ledger, self.ticker, D('.46'), action='sell',
+                               quantity=D('.25'), verified_position_size=D('.25'))
+        self.assertEqual(self.ledger.snapshot(second_id)['requested_count'], '0.25')
+        self.assertEqual(self.venue.submit_ioc.call_count, 2)
+
+    def test_archived_order_and_fill_support_read_only_delayed_recovery(self):
+        cid = 'pilot-test-1234'
+        self.ledger.prepare(cid, self.ticker, plan('yes', 'buy', 1, D('.45')))
+        self.ledger.begin_submit(cid)
+        self.venue.archived_orders.return_value = [
+            {'client_order_id': cid, 'order_id': 'historic-1234', 'ticker': self.ticker,
+             'book_side': 'bid', 'yes_price_dollars': '.45',
+             'initial_count_fp': '1.00', 'fill_count_fp': '0.00',
+             'remaining_count_fp': '0.00', 'status': 'canceled',
+             'subaccount_number': 1, 'exchange_index': 3}]
+        self.venue.fills.return_value = []
+        self.assertEqual(reconcile_one(self.venue, self.ledger, cid)['phase'], 'verified_flat')
+        self.venue.archived_orders.assert_called_once_with(self.ticker)
+        self.venue.submit_ioc.assert_not_called()
 
 
 class CandidateTests(unittest.TestCase):

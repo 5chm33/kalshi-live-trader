@@ -60,7 +60,7 @@ class KalshiClient:
             log.error("[API] No private key found!")
 
     def _sign(self, ts: str, method: str, path: str) -> str:
-        full = path if path.startswith('/trade-api/v2') else f'/trade-api/v2{path}'
+        full = path if path.startswith(('/trade-api/v2', '/trade-api/ws/v2')) else f'/trade-api/v2{path}'
         msg = (ts + method + full.split('?')[0]).encode()
         sig = self.private_key.sign(
             msg,

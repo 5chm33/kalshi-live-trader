@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from account_preflight import secure_config
 from core.execution_ledger import LedgerError, OrderLedger
+from core.fresh_book import fresh_confirmed_quote
 from core.microstructure import _grid_check, effective_fees, fee_estimate, scheduled_start
 from core.order_math import plan
 from core.pilot_venue import MLB_SHARD, ScopedVenue, VenueError, money
@@ -100,7 +101,8 @@ def choose_candidate(public: PublicMarketClient, at: datetime) -> dict | None:
     return None
 
 
-def refreshed_entry(public: PublicMarketClient, candidate: dict) -> tuple[Decimal, Decimal]:
+def refreshed_entry(venue: ScopedVenue, public: PublicMarketClient,
+                    candidate: dict) -> tuple[Decimal, Decimal]:
     """Recheck venue status and executable book immediately before submit."""
     ticker = candidate['ticker']
     fresh_event = public.get_event(candidate['event'])
@@ -114,7 +116,7 @@ def refreshed_entry(public: PublicMarketClient, candidate: dict) -> tuple[Decima
     if (not isinstance(market, dict) or market.get('ticker') != ticker
             or market.get('status') != 'active' or market.get('exchange_index') != MLB_SHARD):
         raise VenueError('Candidate market no longer active')
-    quote = quote_from_orderbook(public.get_orderbook(ticker, depth=1))
+    quote = fresh_confirmed_quote(venue.client, public, ticker)
     if quote is None or time.monotonic() - start > 3:
         raise VenueError('Fresh two-sided book unavailable')
     _grid_check(quote.yes_bid, market)
@@ -147,15 +149,32 @@ def reconcile_one(venue: ScopedVenue, ledger: OrderLedger, client_id: str) -> di
     orders = [row for status in ('resting', 'executed', 'canceled')
               for row in venue.orders(status=status, ticker=ticker)
               if row.get('client_order_id') == client_id]
+    archived_only = not orders
+    if not orders:
+        orders = [row for row in venue.archived_orders(ticker)
+                  if row.get('client_order_id') == client_id]
     if len(orders) != 1:
         ledger.mark_uncertain(client_id, 'Absent or ambiguous client order ID; no write retry')
         raise VenueError('Cannot uniquely recover attempted order; manual reconciliation required')
     order = orders[0]
     ledger.attach_observed_order(client_id, order)
     if order['status'] == 'resting':
+        if archived_only:
+            raise VenueError('Archived resting order is not proof of a current cancellable order')
         venue.cancel_owned_resting(order, client_id)
         raise VenueError('Unexpected resting IOC canceled; wait for terminal venue status')
-    for fill in venue.fills(ticker, order['order_id']):
+    fills = venue.fills(ticker, order['order_id'])
+    observed = sum((money(f['count_fp'], 'fill count') for f in fills), Decimal(0))
+    if observed < money(order['fill_count_fp'], 'order filled quantity'):
+        archived = venue.archived_fills(ticker, order['order_id'])
+        by_id = {f.get('fill_id'): f for f in fills}
+        for old in archived:
+            prior = by_id.get(old.get('fill_id'))
+            if prior is not None and prior != old:
+                raise VenueError('Live and archived fills disagree')
+            by_id[old.get('fill_id')] = old
+        fills = list(by_id.values())
+    for fill in fills:
         ledger.record_fill(client_id, fill)
     current = ledger.snapshot(client_id)
     if money(current['confirmed_fill_count'], 'confirmed fills') != money(current['exchange_fill_count'], 'venue fills'):
@@ -167,7 +186,8 @@ def reconcile_one(venue: ScopedVenue, ledger: OrderLedger, client_id: str) -> di
             if size != 0:
                 raise VenueError('Unexplained isolated position after zero-fill entry')
             ledger.record_verified_flat(client_id, order_terminal=True, exchange_position_size=size)
-        elif size != Decimal('1'):
+        elif (size != money(current['confirmed_fill_count'], 'actual entry fills')
+              or not Decimal(0) < size <= Decimal(1)):
             raise VenueError('Filled entry quantity does not match isolated venue inventory')
     else:
         if size == 0:
@@ -179,8 +199,11 @@ def reconcile_one(venue: ScopedVenue, ledger: OrderLedger, client_id: str) -> di
 
 
 def submit_one(venue: ScopedVenue, ledger: OrderLedger, ticker: str, price: Decimal,
-               *, action: str, verified_position_size: Decimal | None = None) -> str:
-    item = plan('yes', action, 1, price)
+               *, action: str, quantity: Decimal | int = 1,
+               verified_position_size: Decimal | None = None) -> str:
+    if action == 'buy' and quantity != 1:
+        raise LedgerError('The sole pilot entry must request exactly one contract')
+    item = plan('yes', action, quantity, price)
     client_id = 'pilot-' + uuid4().hex
     ledger.prepare(client_id, ticker, item, verified_position_size=verified_position_size)
     payload = item.payload(ticker, client_id, reduce_only=(action == 'sell'),
@@ -198,21 +221,22 @@ def submit_one(venue: ScopedVenue, ledger: OrderLedger, ticker: str, price: Deci
 def entry_cost(ledger: OrderLedger, client_id: str) -> Decimal:
     rows = ledger.db.execute('SELECT count, yes_price, fee FROM fills WHERE client_id=?',
                              (client_id,)).fetchall()
-    if not rows or ledger.filled_quantity(client_id) != Decimal(1):
-        raise LedgerError('Entry fills do not prove ownership of one contract')
+    if not rows or not 0 < ledger.filled_quantity(client_id) <= Decimal(1):
+        raise LedgerError('Entry fills do not prove owned inventory of at most one contract')
     return sum((money(x['count'], 'fill count') * money(x['yes_price'], 'YES price')
                 + money(x['fee'], 'actual entry fee') for x in rows), Decimal(0))
 
 
-def exit_quote(public: PublicMarketClient, ticker: str, minimum_age: bool,
-               entry: Decimal, fee_type: str, multiplier: Decimal) -> Decimal | None:
+def exit_quote(venue: ScopedVenue, public: PublicMarketClient, ticker: str, minimum_age: bool,
+               entry: Decimal, fee_type: str, multiplier: Decimal,
+               remaining: Decimal) -> Decimal | None:
     market = public._get('/markets/' + ticker).get('market')
     if (not isinstance(market, dict) or market.get('status') != 'active'
             or market.get('exchange_index') != MLB_SHARD):
         return None
     started = time.monotonic()
-    quote = quote_from_orderbook(public.get_orderbook(ticker, depth=1))
-    if quote is None or quote.no_ask_size < 1 or time.monotonic() - started > 3:
+    quote = fresh_confirmed_quote(venue.client, public, ticker)
+    if quote is None or quote.no_ask_size < remaining or time.monotonic() - started > 3:
         return None
     _grid_check(quote.yes_bid, market)
     if quote.yes_bid < Decimal('0.01'):
@@ -244,7 +268,7 @@ def run(venue: ScopedVenue, public: PublicMarketClient, ledger: OrderLedger,
                 time.sleep(poll_seconds)
                 continue
             try:
-                price, fee = refreshed_entry(public, candidate)
+                price, fee = refreshed_entry(venue, public, candidate)
                 if venue.cash() < price + fee:
                     raise VenueError('Insufficient confirmed subaccount cash for price plus fee')
             except (VenueError, MarketDataError) as exc:
@@ -266,7 +290,8 @@ def run(venue: ScopedVenue, public: PublicMarketClient, ledger: OrderLedger,
         terminal_parent = (entry['phase'] == 'reconcile' and existing_exits
                            and ledger._row(entry_id)['exchange_status'] in {'executed', 'canceled'}
                            and money(entry['exchange_fill_count'], 'entry venue count') ==
-                           money(entry['confirmed_fill_count'], 'entry fill count') == Decimal(1))
+                           money(entry['confirmed_fill_count'], 'entry fill count')
+                           and Decimal(0) < money(entry['confirmed_fill_count'], 'entry fills') <= 1)
         if entry['phase'] != 'verified_flat' and not terminal_parent:
             reconcile_one(venue, ledger, entry_id)
             entry = ledger.snapshot(entry_id)
@@ -280,7 +305,8 @@ def run(venue: ScopedVenue, public: PublicMarketClient, ledger: OrderLedger,
                                 ON i.client_id=f.client_id WHERE i.action='sell'""")), Decimal(0))
             return {'status': 'verified_closed', 'actual_order_attempts': 1 + len(existing_exits),
                     'realized_net_dollars': str(proceeds - entry_cost(ledger, entry_id))}
-        if entry['phase'] != 'reconcile' or money(entry['confirmed_fill_count'], 'entry fills') != 1:
+        if (entry['phase'] != 'reconcile' or
+                not Decimal(0) < money(entry['confirmed_fill_count'], 'entry fills') <= 1):
             time.sleep(poll_seconds)
             continue
         ticker = entry['ticker']
@@ -296,13 +322,16 @@ def run(venue: ScopedVenue, public: PublicMarketClient, ledger: OrderLedger,
                                 ON i.client_id=f.client_id WHERE i.action='sell'""")), Decimal(0))
             return {'status': 'verified_closed', 'actual_order_attempts': 1 + len(exits),
                     'realized_net_dollars': str(proceeds - entry_cost(ledger, entry_id))}
-        if _position_size(venue, ticker) != 1:
+        remaining = (money(entry['confirmed_fill_count'], 'entry fills') - sum(
+            (ledger.filled_quantity(x['client_id']) for x in exits), Decimal(0)))
+        if not 0 < remaining <= 1 or _position_size(venue, ticker) != remaining:
             raise VenueError('Bot-owned residual one-contract holding cannot be verified')
         if venue.orders(status='resting'):
             raise VenueError('Unexpected resting order in isolated account before exit')
         if len(exits) >= 3:
             return {'status': 'open_holding_after_three_verified_exit_attempts',
-                    'actual_entry_fills': '1.00', 'realized_net_dollars': None}
+                    'actual_entry_fills': str(money(entry['confirmed_fill_count'], 'entry fills')),
+                    'remaining_contracts': str(remaining), 'realized_net_dollars': None}
         if exits and ledger.snapshot(exits[-1]['client_id'])['phase'] != 'partial_verified':
             time.sleep(poll_seconds)
             continue
@@ -321,11 +350,12 @@ def run(venue: ScopedVenue, public: PublicMarketClient, ledger: OrderLedger,
         event_id = ticker.rsplit('-', 1)[0]
         event = public.get_event(event_id)
         typ, mult = effective_fees(series, event)
-        bid = exit_quote(public, ticker, age >= timedelta(minutes=10),
-                         entry_cost(ledger, entry_id), typ, mult)
+        bid = exit_quote(venue, public, ticker, age >= timedelta(minutes=10),
+                         entry_cost(ledger, entry_id) / money(entry['confirmed_fill_count'], 'entry fills'),
+                         typ, mult, remaining)
         if bid is not None:
-            submit_one(venue, ledger, ticker, bid, action='sell',
-                       verified_position_size=Decimal('1'))
+            submit_one(venue, ledger, ticker, bid, action='sell', quantity=remaining,
+                       verified_position_size=remaining)
             print('Sent one reduce-only exit IOC at observed YES bid; awaiting GET reconciliation.', flush=True)
         else:
             print('Holding capped one-contract position: no eligible fresh exit bid.', flush=True)

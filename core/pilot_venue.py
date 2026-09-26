@@ -116,12 +116,30 @@ class ScopedVenue:
             raise VenueError("Missing or duplicate fill IDs")
         return matches
 
+    def archived_orders(self, ticker: str) -> list[dict]:
+        if not TICKER.fullmatch(ticker):
+            raise ValueError('Invalid archived market ticker')
+        rows = self.pages('/historical/orders', 'orders',
+                          f'ticker={quote(ticker, safe="")}&subaccount={self.subaccount}')
+        if any(row.get('subaccount_number') != self.subaccount or row.get('exchange_index') != MLB_SHARD for row in rows):
+            raise VenueError('Archived order belongs to another account/shard')
+        return rows
+
+    def archived_fills(self, ticker: str, order_id: str) -> list[dict]:
+        if not TICKER.fullmatch(ticker) or not ORDER_ID.fullmatch(order_id):
+            raise ValueError('Invalid archived ticker or order')
+        rows = self.pages('/historical/fills', 'fills',
+                          f'ticker={quote(ticker, safe="")}&subaccount={self.subaccount}')
+        if any(row.get('subaccount_number') != self.subaccount or row.get('exchange_index') != MLB_SHARD for row in rows):
+            raise VenueError('Archived fill belongs to another account/shard')
+        return [row for row in rows if row.get('order_id') == order_id]
+
     def submit_ioc(self, payload: dict) -> dict:
         """Exactly one POST. A timeout, redirect, or malformed ACK is *uncertain*."""
         if (not isinstance(payload, dict) or payload.get('subaccount') != self.subaccount
                 or payload.get('exchange_index') != MLB_SHARD
                 or payload.get('time_in_force') != 'immediate_or_cancel'
-                or payload.get('count') != '1.00'
+                or (payload.get('side') == 'bid' and payload.get('count') != '1.00')
                 or payload.get('post_only') is not False
                 or payload.get('cancel_order_on_pause') is not True
                 or payload.get('self_trade_prevention_type') != 'taker_at_cross'
@@ -132,6 +150,9 @@ class ScopedVenue:
                 or not 0 < money(payload.get('price'), 'YES limit') < 1
                 or (payload.get('side') == 'bid' and money(payload.get('price'), 'YES limit') > Decimal('0.50'))):
             raise VenueError("Unapproved IOC payload")
+        qty = money(payload.get('count'), 'contract quantity')
+        if qty != qty.quantize(Decimal('.01')) or not Decimal(0) < qty <= Decimal(1):
+            raise VenueError('Only one-contract entry or fractional owned exit permitted')
         path = '/portfolio/events/orders'
         headers = self.client._auth_headers('POST', path)
         # No automatic retry, no redirect, strict TLS. The caller persists the

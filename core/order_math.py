@@ -22,7 +22,7 @@ class V2OrderPlan:
     side: str
     outcome_limit: Decimal
     yes_limit: Decimal
-    count: int
+    count: Decimal | int
 
     def payload(self, ticker: str, client_order_id: str, *, reduce_only: bool = False,
                 subaccount: int = 0, exchange_index: int = -1) -> dict:
@@ -43,11 +43,22 @@ class V2OrderPlan:
                 "reduce_only": reduce_only, "subaccount": subaccount, "exchange_index": exchange_index}
 
 
-def plan(outcome: str, action: str, count: int, outcome_limit: Decimal) -> V2OrderPlan:
+def plan(outcome: str, action: str, count: Decimal | int, outcome_limit: Decimal) -> V2OrderPlan:
     if outcome not in {"yes", "no"} or action not in {"buy", "sell"}:
         raise ValueError("Outcome must be yes/no and action buy/sell")
-    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 10:
-        raise ValueError("Pilot plan requires 1–10 whole contracts")
+    if action == 'buy':
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 10:
+            raise ValueError("Entry plan requires 1–10 whole contracts")
+    else:
+        try:
+            units = Decimal(str(count))
+        except (ValueError, TypeError):
+            raise ValueError("Exit quantity is invalid") from None
+        if (isinstance(count, bool) or not units.is_finite()
+                or not Decimal(0) < units <= Decimal(10)
+                or units != units.quantize(Decimal('.01'))):
+            raise ValueError("Exit must be positive with two-decimal fixed-point count")
+        count = units
     price = decimal_price(outcome_limit)
     if price != price.quantize(Decimal("0.0001")):
         raise ValueError("Off-grid price")

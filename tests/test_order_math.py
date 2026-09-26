@@ -7,6 +7,17 @@ from core.public_market import BookQuote
 
 
 class V2SemanticsTests(unittest.TestCase):
+    def test_fractional_sell_only_for_reduce_only_inventory(self):
+        with self.assertRaises(ValueError):
+            plan('yes', 'buy', D('.50'), D('.45'))
+        item = plan('yes', 'sell', D('.25'), D('.46'))
+        payload = item.payload('KX-TEST', 'pilot-fraction-123', reduce_only=True,
+                               subaccount=1, exchange_index=3)
+        self.assertEqual(payload['count'], '0.25')
+        self.assertEqual(payload['side'], 'ask')
+        with self.assertRaises(ValueError):
+            plan('yes', 'sell', D('.001'), D('.46'))
+
     def test_all_four_actions_use_yes_book_price(self):
         cases = [
             ("yes", "buy", "bid", "0.3000"),
