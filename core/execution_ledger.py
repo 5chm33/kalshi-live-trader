@@ -22,12 +22,16 @@ class LedgerError(RuntimeError):
 
 
 class OrderLedger:
-    def __init__(self, path: Path, *, max_entry_attempts_per_day: int = 3):
+    def __init__(self, path: Path, *, max_entry_attempts_per_day: int = 3,
+                 subaccount: int = 0):
         if (isinstance(max_entry_attempts_per_day, bool) or
                 not isinstance(max_entry_attempts_per_day, int) or
                 not 1 <= max_entry_attempts_per_day <= 100):
             raise ValueError('Invalid daily entry-attempt cap')
         self.max_entry_attempts_per_day = max_entry_attempts_per_day
+        if isinstance(subaccount, bool) or not isinstance(subaccount, int) or not 0 <= subaccount <= 63:
+            raise ValueError('Invalid ledger subaccount')
+        self.subaccount = subaccount
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_symlink() or (path.exists() and stat.S_IMODE(path.stat().st_mode) & 0o077):
@@ -46,6 +50,20 @@ class OrderLedger:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=DELETE")
         self.db.execute("PRAGMA synchronous=FULL")
+        self.db.execute("""CREATE TABLE IF NOT EXISTS ledger_identity (
+            id INTEGER PRIMARY KEY CHECK (id = 1), subaccount INTEGER NOT NULL)""")
+        identity = self.db.execute("SELECT subaccount FROM ledger_identity WHERE id=1").fetchone()
+        if identity is None:
+            if self.db.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='intents'").fetchone()[0]:
+                # Older journals were always bound to primary subaccount 0.
+                old_count = self.db.execute("SELECT COUNT(*) FROM intents").fetchone()[0]
+                if old_count and subaccount != 0:
+                    self.close()
+                    raise LedgerError('Existing primary-account journal cannot change ownership')
+            self.db.execute("INSERT INTO ledger_identity (id, subaccount) VALUES (1, ?)", (subaccount,))
+        elif identity['subaccount'] != subaccount:
+            self.close()
+            raise LedgerError('Ledger bound to a different subaccount')
         self.db.execute("""CREATE TABLE IF NOT EXISTS intents (
             client_id TEXT PRIMARY KEY, ticker TEXT NOT NULL,
             outcome TEXT NOT NULL, action TEXT NOT NULL, book_side TEXT NOT NULL,
@@ -205,7 +223,7 @@ class OrderLedger:
                     or initial != Decimal(row['count']) or filled < 0 or remaining < 0
                     or filled + remaining > initial
                     or yes_price != Decimal(row['yes_limit'])
-                    or order.get('subaccount_number') != 0
+                    or order.get('subaccount_number') != self.subaccount
                     or (row['exchange_fill_count'] is not None
                         and filled < Decimal(row['exchange_fill_count']))
                     or status not in {'resting', 'canceled', 'executed'}):
@@ -224,7 +242,7 @@ class OrderLedger:
             raise LedgerError("Unexpected fill lifecycle")
         try:
             if (fill["order_id"] != row["order_id"] or not fill["fill_id"]
-                    or fill.get('subaccount_number') != 0):
+                    or fill.get('subaccount_number') != self.subaccount):
                 raise ValueError("Fill order ID mismatch")
             count = Decimal(str(fill["count_fp"]))
             price = Decimal(str(fill["yes_price_dollars"]))

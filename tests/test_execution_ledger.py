@@ -219,6 +219,27 @@ class LedgerTests(unittest.TestCase):
             OrderLedger(self.path)
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
+    def test_dedicated_ledger_rejects_primary_order_and_rebinding(self):
+        other = Path(self.tmp.name) / 'isolated.sqlite'
+        with OrderLedger(other, subaccount=1) as isolated:
+            isolated.prepare('one', 'KX-TEST', self.item)
+            isolated.begin_submit('one')
+            isolated.record_ack('one', {'client_order_id': 'one', 'order_id': 'isolated-one',
+                                        'fill_count': '1', 'remaining_count': '0'})
+            order = {'client_order_id': 'one', 'order_id': 'isolated-one',
+                     'ticker': 'KX-TEST', 'book_side': 'bid', 'yes_price_dollars': '0.3000',
+                     'initial_count_fp': '2.00', 'fill_count_fp': '1.00',
+                     'remaining_count_fp': '0', 'status': 'canceled', 'subaccount_number': 0}
+            with self.assertRaises(LedgerError):
+                isolated.attach_observed_order('one', order)
+            isolated.attach_observed_order('one', dict(order, subaccount_number=1))
+            with self.assertRaises(LedgerError):
+                isolated.record_fill('one', {'order_id': 'isolated-one', 'fill_id': 'f',
+                    'count_fp': '1.00', 'yes_price_dollars': '0.3000',
+                    'fee_cost': '0.01', 'subaccount_number': 0})
+        with self.assertRaisesRegex(LedgerError, 'different subaccount'):
+            OrderLedger(other, subaccount=0)
+
     def test_malformed_ack_fails_closed(self):
         self.ledger.prepare("one", "KX-TEST", self.item)
         self.ledger.begin_submit("one")

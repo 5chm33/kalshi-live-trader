@@ -2,6 +2,8 @@
 
 This repository is a **research prototype, not a proven profitable trading bot**. The previous live entry point had order-direction, reconciliation, stale-price, strategy-calibration, and position-exit defects. `python3 main.py` now runs a **bounded, public-data, read-only observer**. All authenticated writes in `core/kalshi_client.py` are blocked. `--live` exits with an error. No API credentials or backtest server are needed for observation.
 
+**Separate, experimental execution path:** The user approved a maximum **$2 real-money execution-quality pilot**, despite the absence of demonstrated profit. The isolated `fund_pilot.py` and `pilot_live.py` are **not imported by `main.py`** and are never activated by a PR test or public-data collector. They require explicit `--execute`, a newly created shard-3 numbered subaccount containing at most $2, a private lifetime-capped SQLite journal, and Kalshi's signed live GET reconciliation. At most one one-contract YES IOC entry priced at $0.50 or less is attempted. Profits are neither expected nor guaranteed; an IOC may fill zero, and a position may be held if the market closes or its bid vanishes. See [the bounded experimental protocol](PILOT_LIVE.md). Do not use an unsegregated primary-account position for this experiment.
+
 ## Run the observer
 
 ```bash
@@ -57,12 +59,12 @@ The GET-only recovery worker `python3 reconcile_journal.py --config config.json 
 - The standard taker-fee formula is used as an **estimate only**, subject to series-specific fees and real fill accounting. Quoted instant-exit P&L includes entry and exit estimated taker fees.
 - No substituted weather forecast date, fictitious normal-distribution fallback, or silently omitted UKMO member in the computed ensemble; missing target data means no probability.
 - Position GET failures are not treated as an empty portfolio; portfolio positions are paginated. **This does not mean live reconciliation is complete.**
-- Authenticated POST/DELETE writes are blocked at the HTTP client boundary. There is no continuous service in this temporary sandbox; an observer only runs for its configured number of scans.
-- New, **unconnected** execution primitives (`core/order_math.py`, `core/execution_ledger.py`, `core/position_valuation.py`) cover V2 YES/NO quote conversion, zero-bet-if-no-edge sizing, exclusive crash-persistent order journaling, order-status GET recovery, partial-fill/exit ownership, and actual-fill accounting with a fresh-book exit estimate. These are regression-tested components, **not an activated execution loop**. The existing position is user-owned and must never be silently assigned to bot-owned inventory.
+- Authenticated POST/DELETE writes remain blocked in the original `core/kalshi_client.py` and `main.py`; the separately documented, opt-in $2 pilot has its **own** narrowly scoped V2 gateway. The default observer only runs for its configured number of scans.
+- Execution primitives (`core/order_math.py`, `core/execution_ledger.py`, `core/position_valuation.py`) cover V2 YES/NO quote conversion, zero-bet-if-no-edge sizing for strategy research, exclusive crash-persistent order journaling, status GET recovery, partial-fill/exit ownership, and actual-fill accounting with a fresh-book exit estimate. The experimental one-contract pilot uses the ledger but is **not** a validated profitable strategy. The existing primary-account position is user-owned and must never be silently assigned to bot-owned inventory.
 - Local risk limits are separate from API usage tiers: the journal now caps new entry submission attempts at **three per UTC day** by default, while preserving the ability to submit a verified exit. Kalshi's [official rate-limit documentation](https://docs.kalshi.com/getting_started/rate_limits) specifies finite **Advanced** token buckets (300 read and 300 write tokens/second, with endpoint-specific costs), not unlimited trades or a guarantee of profitable fills. A later signed GET from the connected computer confirmed this account's effective Advanced tier with strict TLS; the sandbox's earlier TLS path failure was never bypassed.
 - Signed GETs now refuse cross-host redirects, which otherwise might forward signed headers. The limits command will report the **effective** tier and token refill only when Kalshi's certificate validates; it never grants permission to bypass the independent three-entry local safety cap.
 
-## Still blocked before real-money orders
+## Still blocked before claiming a profitable automated strategy
 
 1. A calibrated, out-of-sample forecast advantage at *achievable* prices, after actual series fees; the MLB probability lookup and tennis rank tables are currently heuristic, not validated.
 2. End-to-end order semantics: Kalshi V2 `bid` buys YES at a **YES price**, while `ask` sells YES at a **YES price**. Buying NO economically means selling YES at `1 - NO ask`, not using a NO price as the V2 ask price.

@@ -24,18 +24,23 @@ class V2OrderPlan:
     yes_limit: Decimal
     count: int
 
-    def payload(self, ticker: str, client_order_id: str, *, reduce_only: bool = False) -> dict:
+    def payload(self, ticker: str, client_order_id: str, *, reduce_only: bool = False,
+                subaccount: int = 0, exchange_index: int = -1) -> dict:
         if not ticker or not client_order_id or len(client_order_id) > 64:
             raise ValueError("Missing ticker or valid client order ID")
         if reduce_only != (self.action == "sell"):
             raise ValueError("Sell exits must be reduce-only; entries must not")
+        if isinstance(subaccount, bool) or not isinstance(subaccount, int) or not 0 <= subaccount <= 63:
+            raise ValueError("Invalid numbered subaccount")
+        if isinstance(exchange_index, bool) or not isinstance(exchange_index, int) or not -1 <= exchange_index <= 100:
+            raise ValueError("Invalid exchange shard")
         return {"ticker": ticker, "client_order_id": client_order_id,
                 "side": self.side, "count": f"{self.count:.2f}",
                 "price": f"{self.yes_limit:.4f}",
                 "time_in_force": "immediate_or_cancel",
                 "self_trade_prevention_type": "taker_at_cross",
                 "post_only": False, "cancel_order_on_pause": True,
-                "reduce_only": reduce_only, "subaccount": 0, "exchange_index": -1}
+                "reduce_only": reduce_only, "subaccount": subaccount, "exchange_index": exchange_index}
 
 
 def plan(outcome: str, action: str, count: int, outcome_limit: Decimal) -> V2OrderPlan:
