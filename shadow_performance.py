@@ -51,11 +51,15 @@ def evaluate(records: list[dict], *, min_hold_seconds: int = 60,
             candidates.append(row)
         elif kind == 'cycle_error':
             raise ValueError('Observation journal contains a data error; do not score an incomplete run')
+        elif kind == 'quote_error':
+            raise ValueError('Observation journal contains a book-data error; rate is undefined')
         elif kind == 'monitor_cycle' and (row.get('source_error') or
-                                          not row.get('espn_ok') or not row.get('kalshi_ok')):
-            raise ValueError('30-minute observation has a source error; rate is undefined')
-        elif kind == 'monitor_end' and row.get('totals', {}).get('source_errors', 0):
-            raise ValueError('30-minute observation ended with source errors; rate is undefined')
+                                          not row.get('espn_ok') or not row.get('kalshi_ok') or
+                                          row.get('quote_errors', 0)):
+            raise ValueError('Observation has a source error or book-data error; rate is undefined')
+        elif kind == 'monitor_end' and (row.get('totals', {}).get('source_errors', 0) or
+                                        row.get('totals', {}).get('quote_errors', 0)):
+            raise ValueError('Observation ended with source errors or book-data errors; rate is undefined')
     for quotes in by_ticker.values():
         quotes.sort(key=lambda q: parse_time(q['observed_at']))
     evaluated = []

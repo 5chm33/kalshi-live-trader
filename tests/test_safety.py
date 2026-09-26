@@ -197,6 +197,7 @@ class PipelineTests(unittest.TestCase):
         out = io.StringIO()
         result = observe_cycle(feed, matcher, client, LatencySniper(), out)
         self.assertEqual(result["strict_matches"], 1)
+        self.assertEqual(result["two_sided_game_pairs"], 1)
         self.assertEqual(result["heuristic_candidates"], 1)
         self.assertEqual(result["real_orders"], 0)
         self.assertEqual(json.loads(out.getvalue().splitlines()[-2])["best_ask"], "0.5100")
@@ -222,6 +223,29 @@ class PipelineTests(unittest.TestCase):
         client.get_orderbook.return_value = book()
         second = observe_cycle(feed, matcher, client, strategy, io.StringIO())
         self.assertEqual(second['heuristic_candidates'], 1)
+
+    def test_one_sided_matched_book_is_ineligible_not_a_data_fabrication(self):
+        game = GameState(sport="mlb", game_id="g", team_a="BAL", team_b="NYY",
+                         team_a_full="Orioles", team_b_full="Yankees", score_a=3,
+                         score_b=0, state="in", period=7,
+                         event_time="2026-09-25T20:05:00Z")
+        feed = Mock()
+        feed.poll.return_value = ([game], [])
+        client = Mock()
+        client.get_markets.return_value = [market("BAL"), market("NYY")]
+        client.get_orderbook.return_value = {"yes_dollars": [["0.45", "5"]],
+                                             "no_dollars": []}
+        output = io.StringIO()
+        result = observe_cycle(feed, MarketMatcher(client), client,
+                               LatencySniper(), output)
+        self.assertEqual(result['strict_matches'], 1)
+        self.assertEqual(result['two_sided_game_pairs'], 0)
+        self.assertEqual(result['unusable_books'], 2)
+        self.assertEqual(result['quote_errors'], 0)
+        self.assertEqual(result['heuristic_candidates'], 0)
+        self.assertEqual(result['real_orders'], 0)
+        self.assertEqual(sum(json.loads(x)['type'] == 'unusable_book'
+                             for x in output.getvalue().splitlines()), 2)
 
 
 if __name__ == "__main__":

@@ -34,6 +34,15 @@ def summarize(records: list[dict]) -> str:
     if quote_errors is not None and (not isinstance(quote_errors, int) or quote_errors < 0 or
             quote_errors != sum(r.get('quote_errors', 0) for r in cycles)):
         raise ValueError('Quoted book error totals do not reconcile')
+    unusable_books = totals.get('unusable_books')
+    if unusable_books is not None and (not isinstance(unusable_books, int) or
+            unusable_books < 0 or unusable_books != sum(r.get('unusable_books', 0) for r in cycles)):
+        raise ValueError('Unusable orderbook totals do not reconcile')
+    two_sided_pairs = totals.get('two_sided_game_pairs')
+    if two_sided_pairs is not None and (not isinstance(two_sided_pairs, int) or
+            two_sided_pairs < 0 or two_sided_pairs > totals.get('strict_matches', -1) or
+            two_sided_pairs != sum(r.get('two_sided_game_pairs', 0) for r in cycles)):
+        raise ValueError('Two-sided game pair totals do not reconcile')
     all_source_valid = (not interrupted and totals.get('source_errors') == 0 and
                         quote_errors == 0 and status['none'] == len(cycles))
     candidates = totals.get('candidates', 0)
@@ -54,10 +63,12 @@ def summarize(records: list[dict]) -> str:
         f"| Kalshi market cycles completed | {totals.get('kalshi_ok')} |",
         f"| Source failures | {totals.get('source_errors')} |",
         f"| Incomplete/failed orderbooks | {quote_errors if quote_errors is not None else 'unknown (legacy journal)'} |",
+        f"| One-sided/empty book snapshots (not executable) | {unusable_books if unusable_books is not None else 'unknown (legacy journal)'} |",
         f"| TLS/certificate failures | {tls_errors} |",
         f"| Largest gap between scans (seconds) | {largest_gap:.1f} |",
         f"| Sampling continuity | {'interrupted' if interrupted else 'not interrupted'} |",
         f"| Strict same-game/time matches | {totals.get('strict_matches')} |",
+        f"| Matched game snapshots with two executable team books | {two_sided_pairs if two_sided_pairs is not None else 'unknown (legacy journal)'} |",
         f"| Uncalibrated candidates | {candidates} |",
         '| Actual bot orders | 0 |',
         '',
@@ -68,6 +79,10 @@ def summarize(records: list[dict]) -> str:
     ]
     if not candidates:
         lines.append('No candidate was observed; hypothetical win rate is also undefined.')
+    if unusable_books:
+        lines.append(f'{unusable_books} matched book snapshots had no two-sided executable quote. '
+                     'These are illiquid markets, not fabricated bids or observed opportunities.')
+    lines.append('Repeated game/book snapshots are not independent trading opportunities.')
     lines.extend(['', 'API access and a high usage tier cannot establish strategy profitability. '
                   'Real-money activation still requires a validated fee-adjusted edge, '
                   'exclusive inventory, independently verified fills/exits, and a durable kill switch.', ''])

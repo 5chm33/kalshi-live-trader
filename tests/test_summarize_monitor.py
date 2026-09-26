@@ -66,6 +66,17 @@ class SummaryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'book error totals'):
             summarize(rows)
 
+    def test_one_sided_books_are_real_but_not_executable(self):
+        rows = self.records()
+        rows[1].pop('source_error')
+        rows[1].update(kalshi_ok=True, quote_errors=0, unusable_books=2)
+        rows[-1]['totals'].update(kalshi_ok=1, source_errors=0,
+                                   quote_errors=0, unusable_books=2)
+        text = summarize(rows)
+        self.assertIn('| One-sided/empty book snapshots (not executable) | 2 |', text)
+        self.assertIn('illiquid markets', text)
+        self.assertIn('Both public feeds remained readable', text)
+
 
 if __name__ == '__main__':
     unittest.main()

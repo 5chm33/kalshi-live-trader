@@ -51,8 +51,9 @@ class MonitorTests(unittest.TestCase):
             tick = [0.0]
             def sleep(seconds):
                 tick[0] += seconds
-            counters = {'strict_matches': 1, 'heuristic_candidates': 0,
-                        'quote_errors': 1}
+            counters = {'strict_matches': 1, 'two_sided_game_pairs': 0,
+                        'heuristic_candidates': 0,
+                        'quote_errors': 1, 'unusable_books': 0}
             feed = Mock()
             feed.poll.return_value = ([], [])
             with patch('observe_30m.time.monotonic', side_effect=lambda: tick[0]), \

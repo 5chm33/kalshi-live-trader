@@ -16,7 +16,7 @@ from pathlib import Path
 
 from core.espn_feed import ESPNFeed
 from core.market_matcher import MarketMatcher
-from core.public_market import MarketDataError, PublicMarketClient, quote_from_orderbook
+from core.public_market import PublicMarketClient, quote_from_orderbook
 from strategies.latency_sniper import LatencySniper
 
 
@@ -42,7 +42,8 @@ def observe_cycle(feed: ESPNFeed, matcher: MarketMatcher, client: PublicMarketCl
     matched = matcher.match_games(games)
     counters = {"games_in_progress": len(games), "score_changes": len(changes),
                 "strict_matches": len(matched), "usable_books": 0,
-                "universe_books": 0, "heuristic_candidates": 0,
+                "two_sided_game_pairs": 0,
+                "unusable_books": 0, "universe_books": 0, "heuristic_candidates": 0,
                 "quote_errors": 0, "real_orders": 0}
 
     # Prove public market discovery and orderbook connectivity even if none
@@ -75,7 +76,11 @@ def observe_cycle(feed: ESPNFeed, matcher: MarketMatcher, client: PublicMarketCl
                 book = client.get_orderbook(market.ticker)
                 quote = quote_from_orderbook(book)
                 if quote is None:
-                    raise MarketDataError("One-sided or empty executable book")
+                    counters["unusable_books"] += 1
+                    output.write(json.dumps({"type": "unusable_book", "observed_at": timestamp(),
+                        "ticker": market.ticker, "reason": "one_sided_or_empty",
+                        "note": "No two-sided executable quote; no candidate or order."}) + "\n")
+                    continue
                 fresh[team] = (replace(market, yes_bid=float(quote.yes_bid),
                                        yes_ask=float(quote.yes_ask)), quote)
                 counters["usable_books"] += 1
@@ -96,6 +101,7 @@ def observe_cycle(feed: ESPNFeed, matcher: MarketMatcher, client: PublicMarketCl
         # Missing either side means the signal has not been fully checked.
         if set(fresh) != {"a", "b"}:
             continue
+        counters["two_sided_game_pairs"] += 1
         updated = replace(game, market_a=fresh["a"][0], market_b=fresh["b"][0])
         signal = strategy.evaluate(updated)
         if not signal:
@@ -135,7 +141,8 @@ def run(cycles: int, interval: float, output_path: Path) -> int:
     strategy = LatencySniper()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     totals = {"games_in_progress": 0, "score_changes": 0, "strict_matches": 0,
-              "usable_books": 0, "universe_books": 0,
+              "usable_books": 0, "two_sided_game_pairs": 0,
+              "unusable_books": 0, "universe_books": 0,
               "heuristic_candidates": 0, "quote_errors": 0,
               "real_orders": 0}
     with output_path.open("a", encoding="utf-8") as output:

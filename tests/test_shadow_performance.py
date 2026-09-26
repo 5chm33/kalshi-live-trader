@@ -50,10 +50,15 @@ class ShadowTests(unittest.TestCase):
     def test_data_error_aborts_instead_of_fabricating_success(self):
         with self.assertRaisesRegex(ValueError, 'data error'):
             evaluate([candidate(), {"type": "cycle_error"}, quote()])
+        with self.assertRaisesRegex(ValueError, 'book-data error'):
+            evaluate([candidate(), {"type": "quote_error"}, quote()])
         with self.assertRaisesRegex(ValueError, 'source error'):
             evaluate([candidate(), {"type": "monitor_cycle", "espn_ok": True,
                                     "kalshi_ok": False, "source_error": "certificate invalid"},
                       quote()])
+        with self.assertRaisesRegex(ValueError, 'book-data error'):
+            evaluate([candidate(), {"type": "monitor_cycle", "espn_ok": True,
+                                    "kalshi_ok": True, "quote_errors": 1}, quote()])
 
     def test_overlapping_signals_do_not_reuse_one_contract_of_exit_depth(self):
         second = candidate()

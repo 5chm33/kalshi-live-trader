@@ -45,8 +45,9 @@ def run(duration_seconds: int, interval_seconds: float, output_path: Path) -> di
     matcher = MarketMatcher(market)
     strategy = LatencySniper()
     totals = dict(cycles=0, espn_ok=0, kalshi_ok=0, source_errors=0,
-                  quote_errors=0,
-                  games_in_progress=0, strict_matches=0, candidates=0,
+                  quote_errors=0, unusable_books=0,
+                  games_in_progress=0, strict_matches=0,
+                  two_sided_game_pairs=0, candidates=0,
                   real_orders=0)
     with os.fdopen(fd, 'a', encoding='utf-8') as output:
         output.write(json.dumps({'type': 'monitor_start', 'at': start_wall,
@@ -58,7 +59,8 @@ def run(duration_seconds: int, interval_seconds: float, output_path: Path) -> di
             totals['cycles'] += 1
             row = {'type': 'monitor_cycle', 'observed_at': now(),
                    'cycle': totals['cycles'], 'espn_ok': False,
-                   'kalshi_ok': False, 'quote_errors': 0, 'real_orders': 0}
+                   'kalshi_ok': False, 'quote_errors': 0,
+                   'unusable_books': 0, 'real_orders': 0}
             try:
                 observed = feed.poll()
                 row['espn_ok'] = True
@@ -72,11 +74,15 @@ def run(duration_seconds: int, interval_seconds: float, output_path: Path) -> di
                     row['kalshi_ok'] = True
                     totals['kalshi_ok'] += 1
                     totals['strict_matches'] += counters['strict_matches']
+                    totals['two_sided_game_pairs'] += counters['two_sided_game_pairs']
                     totals['candidates'] += counters['heuristic_candidates']
                     totals['quote_errors'] += counters['quote_errors']
+                    totals['unusable_books'] += counters['unusable_books']
                     row['strict_matches'] = counters['strict_matches']
+                    row['two_sided_game_pairs'] = counters['two_sided_game_pairs']
                     row['candidates'] = counters['heuristic_candidates']
                     row['quote_errors'] = counters['quote_errors']
+                    row['unusable_books'] = counters['unusable_books']
                 except Exception as exc:
                     row['source_error'] = f'Kalshi/market: {type(exc).__name__}: {str(exc)[:200]}'
             except Exception as exc:
