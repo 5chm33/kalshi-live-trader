@@ -45,6 +45,26 @@ class MonitorTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 run(60, 10, link)
 
+    def test_quote_errors_not_misreported_as_clean_no_opportunity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'events.jsonl'
+            tick = [0.0]
+            def sleep(seconds):
+                tick[0] += seconds
+            counters = {'strict_matches': 1, 'heuristic_candidates': 0,
+                        'quote_errors': 1}
+            feed = Mock()
+            feed.poll.return_value = ([], [])
+            with patch('observe_30m.time.monotonic', side_effect=lambda: tick[0]), \
+                 patch('observe_30m.time.sleep', side_effect=sleep), \
+                 patch('observe_30m.ESPNFeed', return_value=feed), \
+                 patch('observe_30m.observe_cycle', return_value=counters):
+                result = run(60, 10, path)
+            rows = [json.loads(x) for x in path.read_text().splitlines()]
+            self.assertEqual(result['totals']['quote_errors'], 6)
+            self.assertEqual(result['totals']['candidates'], 0)
+            self.assertTrue(all(r['quote_errors'] == 1 for r in rows if r['type'] == 'monitor_cycle'))
+
 
 if __name__ == '__main__':
     unittest.main()

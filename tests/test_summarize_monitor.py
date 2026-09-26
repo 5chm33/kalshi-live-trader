@@ -53,6 +53,19 @@ class SummaryTests(unittest.TestCase):
         self.assertIn('| Sampling continuity | interrupted |', text)
         self.assertIn('wall-clock span', text)
 
+    def test_book_errors_make_zero_signal_window_incomplete(self):
+        rows = self.records()
+        rows[1]['kalshi_ok'] = True
+        rows[1].pop('source_error')
+        rows[1]['quote_errors'] = 1
+        rows[-1]['totals'].update(source_errors=0, kalshi_ok=1, quote_errors=1)
+        text = summarize(rows)
+        self.assertIn('| Incomplete/failed orderbooks | 1 |', text)
+        self.assertIn('executable quotes were missing', text)
+        rows[-1]['totals']['quote_errors'] = 0
+        with self.assertRaisesRegex(ValueError, 'book error totals'):
+            summarize(rows)
+
 
 if __name__ == '__main__':
     unittest.main()

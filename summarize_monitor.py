@@ -30,8 +30,12 @@ def summarize(records: list[dict]) -> str:
                    largest_gap > max(30, 3 * start['interval_seconds']))
     status = Counter('Kalshi' if r.get('espn_ok') and not r.get('kalshi_ok') else
                      'ESPN' if not r.get('espn_ok') else 'none' for r in cycles)
+    quote_errors = totals.get('quote_errors')
+    if quote_errors is not None and (not isinstance(quote_errors, int) or quote_errors < 0 or
+            quote_errors != sum(r.get('quote_errors', 0) for r in cycles)):
+        raise ValueError('Quoted book error totals do not reconcile')
     all_source_valid = (not interrupted and totals.get('source_errors') == 0 and
-                        status['none'] == len(cycles))
+                        quote_errors == 0 and status['none'] == len(cycles))
     candidates = totals.get('candidates', 0)
     if not isinstance(candidates, int) or candidates < 0:
         raise ValueError('Invalid candidate total')
@@ -49,6 +53,7 @@ def summarize(records: list[dict]) -> str:
         f"| ESPN reads succeeded | {totals.get('espn_ok')} |",
         f"| Kalshi market cycles completed | {totals.get('kalshi_ok')} |",
         f"| Source failures | {totals.get('source_errors')} |",
+        f"| Incomplete/failed orderbooks | {quote_errors if quote_errors is not None else 'unknown (legacy journal)'} |",
         f"| TLS/certificate failures | {tls_errors} |",
         f"| Largest gap between scans (seconds) | {largest_gap:.1f} |",
         f"| Sampling continuity | {'interrupted' if interrupted else 'not interrupted'} |",
@@ -58,7 +63,7 @@ def summarize(records: list[dict]) -> str:
         '',
         '**Conclusion:** ' + ('Both public feeds remained readable during the observation.'
                               if all_source_valid else
-                              'The sampling window was interrupted or a source failed; this cannot validate a trading signal or exchange execution.'),
+                              'The sampling window was interrupted, a source failed, or executable quotes were missing; this cannot validate a trading signal or exchange execution.'),
         'No real order was sent by this read-only code. **Actual bot win rate and realized bot P&L are undefined**, not 0% or 100%.',
     ]
     if not candidates:

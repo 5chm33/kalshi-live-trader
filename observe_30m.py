@@ -45,6 +45,7 @@ def run(duration_seconds: int, interval_seconds: float, output_path: Path) -> di
     matcher = MarketMatcher(market)
     strategy = LatencySniper()
     totals = dict(cycles=0, espn_ok=0, kalshi_ok=0, source_errors=0,
+                  quote_errors=0,
                   games_in_progress=0, strict_matches=0, candidates=0,
                   real_orders=0)
     with os.fdopen(fd, 'a', encoding='utf-8') as output:
@@ -57,7 +58,7 @@ def run(duration_seconds: int, interval_seconds: float, output_path: Path) -> di
             totals['cycles'] += 1
             row = {'type': 'monitor_cycle', 'observed_at': now(),
                    'cycle': totals['cycles'], 'espn_ok': False,
-                   'kalshi_ok': False, 'real_orders': 0}
+                   'kalshi_ok': False, 'quote_errors': 0, 'real_orders': 0}
             try:
                 observed = feed.poll()
                 row['espn_ok'] = True
@@ -72,8 +73,10 @@ def run(duration_seconds: int, interval_seconds: float, output_path: Path) -> di
                     totals['kalshi_ok'] += 1
                     totals['strict_matches'] += counters['strict_matches']
                     totals['candidates'] += counters['heuristic_candidates']
+                    totals['quote_errors'] += counters['quote_errors']
                     row['strict_matches'] = counters['strict_matches']
                     row['candidates'] = counters['heuristic_candidates']
+                    row['quote_errors'] = counters['quote_errors']
                 except Exception as exc:
                     row['source_error'] = f'Kalshi/market: {type(exc).__name__}: {str(exc)[:200]}'
             except Exception as exc:
