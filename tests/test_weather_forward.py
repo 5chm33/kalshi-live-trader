@@ -59,17 +59,24 @@ class IdentityTests(unittest.TestCase):
                 study.nws_forecast(Mock(),{'icao':'KNYC'},date(2026,9,27),now)
 
     def test_final_label_needs_matching_venue_settlement(self):
+        rule=('If the maximum temperature recorded at New York City (CLINYC) for '
+              'Sep 25, 2026, is between 69-70° fahrenheit according to The Weather Company, '
+              'then the market resolves to Yes.')
         observed = {'target_date':'2026-09-25','event_ticker':'KXHIGHNY-26SEP25',
                     'station_from_prior_final_TWC_report':{'cliId':'NYC','icao':'KNYC'},
-                    'markets':[{'ticker':'A'}]}
+                    'markets':[{'ticker':'A','rules_primary':rule}]}
         climate={'date':'2026-09-25','results':[{'station':{'cliId':'NYC','icao':'KNYC'},
                  'status':'official','data':{'isOfficial':True,'reportDate':'2026-09-25','maxTemp':69}}]}
         venue=Mock();venue.get_event.return_value={'markets':[{'ticker':'A','status':'active'}]}
         with patch.object(study,'get_json',return_value=climate):
             self.assertIsNone(study.label(venue,Mock(),observed))
-            venue.get_event.return_value={'markets':[{'ticker':'A','status':'settled',
-                    'settlement_value_dollars':'1.0000','result':'yes'}]}
+            venue.get_event.return_value={'markets':[{'ticker':'A','status':'finalized',
+                    'rules_primary':rule, 'settlement_value_dollars':'1.0000','result':'yes'}]}
             result=study.label(venue,Mock(),observed)
+            venue.get_event.return_value={'markets':[{'ticker':'A','status':'finalized',
+                    'rules_primary':rule, 'settlement_value_dollars':'0.0000','result':'no'}]}
+            with self.assertRaisesRegex(MarketDataError,'disagrees'):
+                study.label(venue,Mock(),observed)
         self.assertEqual(result['twc_station_row']['data']['maxTemp'],69)
         self.assertEqual(result['venue_settlements'][0]['result'],'yes')
         self.assertEqual(result['real_orders'],0)

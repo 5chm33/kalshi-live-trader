@@ -15,6 +15,7 @@ import re
 import sys
 import time
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -30,6 +31,9 @@ LAST_TARGET = date(2026, 10, 3)
 DEADLINE = datetime(2026, 10, 5, 22, 5, tzinfo=timezone.utc)
 RULE = re.compile(r'\bmaximum temperature recorded at ([^()]+?) \((CLI[A-Z]{3})\) for '
                   r'([A-Z][a-z]{2} \d{1,2}, 20\d{2}), is\b')
+THRESHOLD = re.compile(r'\bis (?:between (?P<low>-?\d+)-(?P<high>-?\d+)|'
+                       r'less than (?P<less>-?\d+)|greater than (?P<greater>-?\d+))°?'
+                       r'\s+fahrenheit according to The Weather Company\b', re.IGNORECASE)
 SOURCE_URL = 'https://weather.com/kalshi/api/climate/primary'
 NWS_ROOT = 'https://api.weather.gov'
 NWS_HEADERS = {'User-Agent': 'kalshi-home-weather-research/1.0 (public, read-only)',
@@ -81,6 +85,21 @@ def rule_identity(markets: list[dict], target: date) -> tuple[str, str]:
     if day != target:
         raise MarketDataError('Wrong target date in binding weather rule')
     return city, cli
+
+
+def rule_payout(rule: str, max_temp: int) -> bool:
+    """Only model the explicit integer-CLI high-temperature rule shapes seen live."""
+    if not isinstance(rule, str) or isinstance(max_temp, bool) or not isinstance(max_temp, int):
+        raise MarketDataError('Cannot verify noninteger official climate maximum')
+    matched = THRESHOLD.findall(rule)
+    if len(matched) != 1:
+        raise MarketDataError('Unsupported/ambiguous temperature threshold')
+    low, high, less, greater = matched[0]
+    if low and high:
+        if int(low) > int(high):
+            raise MarketDataError('Invalid temperature range')
+        return int(low) <= max_temp <= int(high)
+    return max_temp < int(less) if less else max_temp > int(greater)
 
 
 def get_json(session: requests.Session, url: str, *, params: dict | None = None,
@@ -253,8 +272,23 @@ def label(client: PublicMarketClient, twc: requests.Session, decision: dict) -> 
     if (not isinstance(markets, list) or {m.get('ticker') for m in markets} !=
             {m['ticker'] for m in decision['markets']}):
         raise MarketDataError('Venue settlement market set changed')
-    if any(m.get('status') != 'settled' or m.get('settlement_value_dollars') is None for m in markets):
+    if any(m.get('status') not in ('settled', 'finalized') or
+           m.get('settlement_value_dollars') is None for m in markets):
         return None
+    max_temp = row['data']['maxTemp']
+    if not isinstance(max_temp, int):
+        raise MarketDataError('Official climate maximum must be an integer Fahrenheit value')
+    for m in markets:
+        original = next(x for x in decision['markets'] if x['ticker'] == m['ticker'])
+        if m.get('rules_primary') != original.get('rules_primary'):
+            raise MarketDataError('Binding venue settlement rule changed after cutoff')
+        expected = rule_payout(original['rules_primary'], max_temp)
+        try:
+            paid = Decimal(str(m['settlement_value_dollars']))
+        except (InvalidOperation, TypeError) as exc:
+            raise MarketDataError('Invalid venue terminal payout') from exc
+        if paid != Decimal(int(expected)) or m.get('result') != ('yes' if expected else 'no'):
+            raise MarketDataError('TWC official final value disagrees with venue settlement')
     return {'type': 'source_and_venue_label', 'observed_at_utc': stamp(datetime.now(timezone.utc)),
             'target_date': target.isoformat(), 'event_ticker': decision['event_ticker'],
             'twc_report_url': f'{SOURCE_URL}?date={target.isoformat()}',
