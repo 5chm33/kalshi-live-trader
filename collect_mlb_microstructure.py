@@ -151,6 +151,14 @@ def scan_selected(client, file, selected, series, now):
             if current_start != start:
                 raise MarketDataError("Scheduled-time rule changed after selection")
             effective_fees(series, event)
+            statuses = [m.get("status") for m in markets]
+            if any(status != "active" for status in statuses):
+                # A halted/finalized market is a genuine unavailable opportunity,
+                # not a malformed book. Never query its book or score this tick.
+                emit(file, "book_ineligible", event_ticker=ticker,
+                     scheduled_start_utc=start_text, reason="winner_market_inactive",
+                     statuses=statuses, real_orders=0, real_fills=0)
+                continue
             # Each request is an independent live public snapshot. No batch atomicity
             # and no guaranteed queue allocation; receipt times bound the skew.
             captured = []
@@ -163,7 +171,7 @@ def scan_selected(client, file, selected, series, now):
             result = paired_book(markets, [x["book"] for x in captured], series, event)
             emit(file, "book_snapshot", event_ticker=ticker, scheduled_start_utc=start_text,
                  sample_at_utc=captured[0]["before_utc"], books=captured,
-                 statuses=[m.get("status") for m in markets],
+                 statuses=statuses,
                  current_market_metadata=[{k: m.get(k) for k in
                      ("ticker", "status", "close_time", "rules_primary", "price_ranges")}
                      for m in markets],

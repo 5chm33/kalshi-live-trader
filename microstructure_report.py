@@ -33,6 +33,7 @@ def summarize(rows, as_of=None):
     starts, endings = [], []
     selected, samples, settled = {}, defaultdict(list), {}
     errors = Counter()
+    ineligible = Counter()
     snapshot_count = 0
     for row in rows:
         kind = row.get("type")
@@ -55,6 +56,13 @@ def summarize(rows, as_of=None):
             anchor = moment(selected[ticker]["scheduled_start_utc"]) - timedelta(minutes=30)
             if abs((moment(row["sample_at_utc"]) - anchor).total_seconds()) <= 35:
                 samples[ticker].append(row)
+        elif kind == "book_ineligible":
+            if (row.get("event_ticker") not in selected or row.get("real_orders") != 0
+                    or row.get("real_fills") != 0 or row.get("reason") != "winner_market_inactive"
+                    or not isinstance(row.get("statuses"), list) or len(row["statuses"]) != 2
+                    or all(status == "active" for status in row["statuses"])):
+                raise ValueError("Malformed or out-of-cohort inactive-market record")
+            ineligible["inactive_market_observations"] += 1
         elif kind == "event_settlement":
             ticker = row["event_ticker"]
             if ticker in settled:
@@ -117,6 +125,7 @@ def summarize(rows, as_of=None):
              f"- Games meeting both fixed gates: **{persistent_and_fee}/120**",
              f"- Later settled games: {len(settled)}; exceptional or nonbinary payouts: {outcome_exceptions}",
              f"- Logged book/cycle/settlement errors: {dict(errors)}",
+             f"- Explicit inactive-market observations: {ineligible['inactive_market_observations']} (not executable or independent games)",
              f"- Future decision times not yet reached: {statuses['future_decision_pending']}; missing after due: {statuses['missing_fixed_decision_snapshot']}; one-sided/thin/invalid: {statuses['one_sided_thin_or_ineligible']}",
              "- **Bot orders: 0; bot fills: 0; realized bot P&L: undefined.**",
              "", "**Feasibility screen:** " + ("basic displayed-book conditions met; still not a profitable trading result." if adequate

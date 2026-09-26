@@ -32,6 +32,21 @@ class MicrostructureReportTests(unittest.TestCase):
         self.assertIn('Actual book snapshots: 1', result)
         self.assertIn('missing after due: 1', result)
 
+    def test_finalized_market_is_not_a_trade_or_valid_fixed_quote(self):
+        rows = [{'type': 'study_start', 'start_at_utc': '2026-09-26T00:00:00Z',
+                 'until_utc': '2026-10-02T00:00:00Z'},
+                {'type': 'event_selected', 'event_ticker': 'X',
+                 'scheduled_start_utc': '2026-09-26T23:15:00Z'},
+                {'type': 'book_ineligible', 'event_ticker': 'X',
+                 'reason': 'winner_market_inactive', 'statuses': ['active', 'finalized'],
+                 'real_orders': 0, 'real_fills': 0}]
+        report = summarize(rows, as_of=datetime(2026, 9, 27, tzinfo=timezone.utc))
+        self.assertIn('Explicit inactive-market observations: 1', report)
+        self.assertIn('valid nearest-30-minute two-sided decision snapshot: **0**', report)
+        self.assertIn('missing after due: 1', report)
+        with self.assertRaisesRegex(ValueError, 'Malformed'):
+            summarize(rows[:2] + [dict(rows[2], real_orders=1)])
+
     def test_many_snapshots_are_one_game_and_no_fills(self):
         rows = [{'type': 'study_start', 'start_at_utc': '2026-09-26T00:00:00Z',
                  'until_utc': '2026-10-02T00:00:00Z'},

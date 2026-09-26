@@ -42,6 +42,18 @@ class MLBCollectorTests(unittest.TestCase):
         self.assertEqual(self.client.get_orderbook.call_count, 2)
         self.assertTrue(all(x.kwargs['depth'] == 1 for x in self.client.get_orderbook.call_args_list))
 
+    def test_finalized_market_is_ineligible_without_book_requests(self):
+        self.event['markets'][1]['status'] = 'finalized'
+        with open_private_journal(self.path) as file:
+            result = scan_selected(self.client, file, {'X': '2026-09-26T23:15:00Z'}, self.series,
+                                   datetime(2026, 9, 26, 22, 45, tzinfo=timezone.utc))
+        self.assertEqual(result, 0)
+        self.client.get_orderbook.assert_not_called()
+        row = json.loads(self.path.read_text().splitlines()[0])
+        self.assertEqual(row['type'], 'book_ineligible')
+        self.assertEqual(row['statuses'], ['active', 'finalized'])
+        self.assertEqual(row['real_orders'], 0)
+
     def test_event_with_extra_markets_and_ambiguous_time_excluded(self):
         self.event['markets'].append(market('X-C'))
         with self.assertRaises(MarketDataError): event_markets(self.event)
