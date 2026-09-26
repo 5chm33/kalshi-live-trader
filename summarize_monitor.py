@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 
@@ -20,9 +21,17 @@ def summarize(records: list[dict]) -> str:
         raise ValueError('Monitor duration or cycle totals do not reconcile')
     if any(r.get('real_orders') != 0 for r in cycles) or totals.get('real_orders') != 0:
         raise ValueError('This read-only monitor cannot attribute exchange orders')
+    wall_seconds = (datetime.fromisoformat(end['ended_at']) -
+                    datetime.fromisoformat(start['at'])).total_seconds()
+    samples = [datetime.fromisoformat(r['observed_at']) for r in cycles]
+    largest_gap = max(((b-a).total_seconds() for a, b in zip(samples, samples[1:])),
+                      default=0)
+    interrupted = (wall_seconds > 1.2 * start['duration_seconds'] or
+                   largest_gap > max(30, 3 * start['interval_seconds']))
     status = Counter('Kalshi' if r.get('espn_ok') and not r.get('kalshi_ok') else
                      'ESPN' if not r.get('espn_ok') else 'none' for r in cycles)
-    all_source_valid = totals.get('source_errors') == 0 and status['none'] == len(cycles)
+    all_source_valid = (not interrupted and totals.get('source_errors') == 0 and
+                        status['none'] == len(cycles))
     candidates = totals.get('candidates', 0)
     if not isinstance(candidates, int) or candidates < 0:
         raise ValueError('Invalid candidate total')
@@ -31,8 +40,9 @@ def summarize(records: list[dict]) -> str:
     lines = [
         '# Thirty-minute Kalshi public-data observation',
         '',
-        f"**Window (UTC):** {start['at']} – {end['ended_at']} "
-        f"({end['elapsed_seconds']} seconds; requested {start['duration_seconds']} seconds).",
+        f"**Window (UTC):** {start['at']} – {end['ended_at']}.",
+        f"**Active runtime:** {end['elapsed_seconds']} seconds; **wall-clock span:** "
+        f"{wall_seconds:.1f} seconds; requested {start['duration_seconds']} seconds.",
         '',
         '| Measure | Observed |', '| --- | ---: |',
         f"| Completed scan attempts | {len(cycles)} |",
@@ -40,13 +50,15 @@ def summarize(records: list[dict]) -> str:
         f"| Kalshi market cycles completed | {totals.get('kalshi_ok')} |",
         f"| Source failures | {totals.get('source_errors')} |",
         f"| TLS/certificate failures | {tls_errors} |",
+        f"| Largest gap between scans (seconds) | {largest_gap:.1f} |",
+        f"| Sampling continuity | {'interrupted' if interrupted else 'not interrupted'} |",
         f"| Strict same-game/time matches | {totals.get('strict_matches')} |",
         f"| Uncalibrated candidates | {candidates} |",
         '| Actual bot orders | 0 |',
         '',
         '**Conclusion:** ' + ('Both public feeds remained readable during the observation.'
                               if all_source_valid else
-                              'At least one source failed; the session cannot validate a trading signal or exchange execution.'),
+                              'The sampling window was interrupted or a source failed; this cannot validate a trading signal or exchange execution.'),
         'No real order was sent by this read-only code. **Actual bot win rate and realized bot P&L are undefined**, not 0% or 100%.',
     ]
     if not candidates:

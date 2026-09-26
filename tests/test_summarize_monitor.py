@@ -7,8 +7,9 @@ class SummaryTests(unittest.TestCase):
     def records(self):
         return [
             {'type': 'monitor_start', 'at': '2026-09-25T00:00:00Z',
-             'duration_seconds': 1800},
+             'duration_seconds': 1800, 'interval_seconds': 10},
             {'type': 'monitor_cycle', 'espn_ok': True, 'kalshi_ok': False,
+             'observed_at': '2026-09-25T00:00:00Z',
              'source_error': 'Kalshi: SSLError certificate invalid', 'real_orders': 0},
             {'type': 'monitor_end', 'ended_at': '2026-09-25T00:30:00Z',
              'elapsed_seconds': 1800.1, 'totals': {
@@ -39,6 +40,18 @@ class SummaryTests(unittest.TestCase):
         rows[1]['real_orders'] = 1
         with self.assertRaisesRegex(ValueError, 'cannot attribute'):
             summarize(rows)
+
+    def test_suspended_runtime_is_not_reported_as_continuous_thirty_minutes(self):
+        rows = self.records()
+        rows[1]['kalshi_ok'] = True
+        rows[1].pop('source_error')
+        rows.insert(2, {'type': 'monitor_cycle', 'observed_at': '2026-09-25T03:00:00Z',
+                        'espn_ok': True, 'kalshi_ok': True, 'real_orders': 0})
+        rows[-1]['ended_at'] = '2026-09-25T03:00:01Z'
+        rows[-1]['totals'].update(cycles=2, source_errors=0, kalshi_ok=2)
+        text = summarize(rows)
+        self.assertIn('| Sampling continuity | interrupted |', text)
+        self.assertIn('wall-clock span', text)
 
 
 if __name__ == '__main__':
