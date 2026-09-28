@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from core.pilot_venue import VenueError
+from core.pilot_retirement import PilotRetiredError
 from fund_pilot import CAP, TRANSFER_CENTICENTS, TRANSFER_CENTS, fund, once_post, save_stage
 
 
@@ -25,17 +26,14 @@ class FundingTests(unittest.TestCase):
             with self.assertRaises(VenueError):
                 fund(Mock(), path)
 
-    def test_signed_post_once_never_retries_timeout(self):
+    def test_completed_funding_post_boundary_is_retired_before_network(self):
         client = Mock()
         client.base_url = 'https://external-api.kalshi.com'
         client._auth_headers.return_value = {'KALSHI-ACCESS-KEY': 'mock'}
-        client.session.post.side_effect = TimeoutError('ambiguous')
-        with self.assertRaisesRegex(VenueError, 'do not repeat'):
+        client.session.post.side_effect = TimeoutError('must not reach network')
+        with self.assertRaises(PilotRetiredError):
             once_post(client, '/portfolio/intra_exchange_instance_transfer', {'amount': 20000})
-        client.session.post.assert_called_once()
-        self.assertEqual(client.session.post.call_args.kwargs['json']['amount'], 20000)
-        self.assertEqual(client.session.post.call_args.kwargs['verify'], True)
-        self.assertEqual(client.session.post.call_args.kwargs['allow_redirects'], False)
+        client.session.post.assert_not_called()
 
     def test_preflight_halts_on_unknown_subaccount_without_write(self):
         client = Mock()

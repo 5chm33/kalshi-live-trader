@@ -46,7 +46,7 @@ class IdentityTests(unittest.TestCase):
         station={'properties':{'stationIdentifier':'KNYC'},
                  'geometry':{'type':'Point','coordinates':[-73.96667,40.78333]}}
         points={'properties':{'forecastHourly':'https://api.weather.gov/gridpoints/OKX/34,45/forecast/hourly'}}
-        forecast={'properties':{'generatedAt':'2026-09-26T22:00:20Z','periods':hourly}}
+        forecast={'properties':{'generatedAt':'2026-09-26T22:00:20Z','updateTime':'2026-09-26T21:00:00Z','periods':hourly}}
         with patch.object(study,'get_json',side_effect=[station,points,forecast]) as request:
             result=study.nws_forecast(Mock(),{'icao':'KNYC'},date(2026,9,27),now,
                                       receipt_fn=lambda: now+timedelta(seconds=25))
@@ -56,10 +56,30 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(result['forecast_received_at_utc'],'2026-09-26T22:00:25Z')
         self.assertIn('not a TWC',result['interpretation'])
         with patch.object(study,'get_json',side_effect=[station,points,{'properties':{
-                'generatedAt':'2026-09-26T21:00:00Z','periods':hourly[:-1]}}]):
+                'generatedAt':'2026-09-26T21:00:00Z','updateTime':'2026-09-26T21:00:00Z','periods':hourly[:-1]}}]):
             with self.assertRaisesRegex(MarketDataError,'Incomplete'):
                 study.nws_forecast(Mock(),{'icao':'KNYC'},date(2026,9,27),now,
                                    receipt_fn=lambda: now+timedelta(seconds=25))
+
+    def test_stale_nws_product_and_skewed_books_are_rejected(self):
+        now=datetime(2026,9,26,22,0,tzinfo=timezone.utc)
+        start=datetime(2026,9,27,4,0,tzinfo=timezone.utc)
+        hourly=[{'startTime':study.stamp(start+timedelta(hours=i)),
+                 'temperature':67,'temperatureUnit':'F'} for i in range(24)]
+        station={'properties':{'stationIdentifier':'KNYC'},
+                 'geometry':{'type':'Point','coordinates':[-73.96667,40.78333]}}
+        points={'properties':{'forecastHourly':'https://api.weather.gov/gridpoints/OKX/34,45/forecast/hourly'}}
+        stale={'properties':{'generatedAt':'2026-09-25T00:00:00Z','updateTime':'2026-09-25T00:00:00Z','periods':hourly}}
+        with patch.object(study,'get_json',side_effect=[station,points,stale]):
+            with self.assertRaisesRegex(MarketDataError,'stale'):
+                study.nws_forecast(Mock(),{'icao':'KNYC'},date(2026,9,27),now,
+                                   receipt_fn=lambda:now+timedelta(seconds=1))
+        good=[{'before_utc':'2026-09-26T22:00:00Z','after_utc':'2026-09-26T22:00:01Z'},
+              {'before_utc':'2026-09-26T22:00:06Z','after_utc':'2026-09-26T22:00:06Z'}]
+        with self.assertRaisesRegex(MarketDataError,'skew'):
+            study.common_book_window(good)
+        first,last=study.common_book_window([dict(good[0]),{'before_utc':'2026-09-26T22:00:04Z','after_utc':'2026-09-26T22:00:05Z'}])
+        self.assertEqual((last-first).total_seconds(),5)
 
     def test_final_label_needs_matching_venue_settlement(self):
         rule=('If the maximum temperature recorded at New York City (CLINYC) for '
@@ -155,6 +175,36 @@ class IdentityTests(unittest.TestCase):
             self.assertEqual(result['decisions'],1)
             self.assertEqual(get.call_count,1)
             self.assertEqual([x['type'] for x in map(json.loads,journal.read_text().splitlines())].count('decision_observation'),1)
+
+    def test_revision_becomes_labelable_again_before_fixed_tail(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp)/'logs';folder.mkdir(mode=0o700)
+            journal=folder/'weather.jsonl'
+            day='2026-09-27'
+            start={'type':'study_start','observed_at_utc':'2026-09-26T21:00:00Z',
+                   'series':study.SERIES,'first_target':study.FIRST_TARGET.isoformat(),
+                   'last_target':study.LAST_TARGET.isoformat(),'until_utc':study.stamp(study.DEADLINE),
+                   'cutoff_local':'18:00 America/New_York','paper_orders':0,'real_orders':0,'real_fills':0}
+            decision={'type':'decision_observation','target_date':day,
+                      'station_from_prior_final_TWC_report':{'cliId':'NYC'},
+                      'paper_orders':0,'real_orders':0,'real_fills':0}
+            old={'type':'source_and_venue_label','target_date':day,'twc_station_row':{'data':{'maxTemp':69}},
+                 'paper_orders':0,'real_orders':0,'real_fills':0}
+            revision={'type':'source_revision_or_disagreement','target_date':day,'previous_label':old,
+                      'new_label_or_null':None,'current_source_snapshot':{'row':{}},
+                      'paper_orders':0,'real_orders':0,'real_fills':0}
+            journal.write_text('\n'.join(json.dumps(x) for x in (start,decision,old,revision))+'\n');journal.chmod(0o600)
+            clock={'now':datetime(2026,9,29,12,tzinfo=timezone.utc)}
+            recovered={'type':'source_and_venue_label','target_date':day,'twc_station_row':{'data':{'maxTemp':69}},
+                       'paper_orders':0,'real_orders':0,'real_fills':0}
+            with patch.object(study,'label',return_value=recovered) as label:
+                study.run(journal=journal,public=Mock(),twc=Mock(),nws=Mock(),now_fn=lambda:clock['now'],
+                          sleep=lambda _:clock.update(now=study.DEADLINE+timedelta(seconds=1)))
+            _,_,labels,_=study.load_journal(journal)
+            self.assertEqual(label.call_count,1)
+            self.assertEqual(labels,{day})
+            rows=[json.loads(x) for x in journal.read_text().splitlines()]
+            self.assertEqual(sum(r['type']=='source_and_venue_label' for r in rows),2)
 
 
 if __name__=='__main__':

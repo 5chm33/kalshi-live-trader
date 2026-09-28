@@ -29,6 +29,8 @@ LOCAL_TZ = ZoneInfo('America/New_York')
 FIRST_TARGET = date(2026, 9, 27)
 LAST_TARGET = date(2026, 10, 3)
 DEADLINE = datetime(2026, 10, 5, 22, 5, tzinfo=timezone.utc)
+MAX_FORECAST_AGE = timedelta(hours=6)
+MAX_BOOK_SKEW = timedelta(seconds=5)
 RULE = re.compile(r'\bmaximum temperature recorded at ([^()]+?) \((CLI[A-Z]{3})\) for '
                   r'([A-Z][a-z]{2} \d{1,2}, 20\d{2}), is\b')
 THRESHOLD = re.compile(r'\bis (?:between (?P<low>-?\d+)-(?P<high>-?\d+)|'
@@ -102,6 +104,23 @@ def rule_payout(rule: str, max_temp: int) -> bool:
     return max_temp < int(less) if less else max_temp > int(greater)
 
 
+def common_book_window(books: list[dict]) -> tuple[datetime, datetime]:
+    """Return one bounded public-book envelope or reject non-comparable legs."""
+    if not books:
+        raise MarketDataError('No weather books received')
+    try:
+        starts = [parse_stamp(book['before_utc']) for book in books]
+        ends = [parse_stamp(book['after_utc']) for book in books]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise MarketDataError('Weather book receipt timestamp malformed') from exc
+    if any(end < start for start, end in zip(starts, ends)):
+        raise MarketDataError('Weather book receipt timestamp reversed')
+    first_book, last_book = min(starts), max(ends)
+    if last_book - first_book > MAX_BOOK_SKEW:
+        raise MarketDataError('Weather orderbook snapshot skew exceeds common-state limit')
+    return first_book, last_book
+
+
 def get_json(session: requests.Session, url: str, *, params: dict | None = None,
              headers: dict | None = None) -> dict:
     resp = session.get(url, params=params, headers=headers, timeout=12, allow_redirects=False)
@@ -162,10 +181,19 @@ def nws_forecast(session: requests.Session, station: dict, target: date, receive
     forecast_received_at = receipt_fn() if receipt_fn is not None else datetime.now(timezone.utc)
     forecast = document.get('properties') or {}
     generated = forecast.get('generatedAt')
+    updated = forecast.get('updateTime')
     periods = forecast.get('periods')
-    if (not isinstance(generated, str) or not isinstance(periods, list)
-            or forecast_received_at < received or parse_stamp(generated) > forecast_received_at):
+    if (not isinstance(generated, str) or not isinstance(updated, str) or not isinstance(periods, list)
+            or forecast_received_at < received):
         raise MarketDataError('NWS forecast time absent or after decision')
+    try:
+        generated_at, updated_at = parse_stamp(generated), parse_stamp(updated)
+    except ValueError as exc:
+        raise MarketDataError('NWS forecast timestamps malformed') from exc
+    if (generated_at > forecast_received_at or updated_at > forecast_received_at
+            or forecast_received_at - generated_at > MAX_FORECAST_AGE
+            or forecast_received_at - updated_at > MAX_FORECAST_AGE):
+        raise MarketDataError('NWS forecast product is stale or future-dated at decision')
     observed = {}
     for p in periods:
         if not isinstance(p, dict) or not isinstance(p.get('startTime'), str):
@@ -188,15 +216,19 @@ def nws_forecast(session: requests.Session, station: dict, target: date, receive
         raise MarketDataError('Incomplete DST-aware NWS next-day hourly forecast')
     return {'station': site, 'point': point, 'forecast': document,
             'forecast_received_at_utc': stamp(forecast_received_at),
+            'forecast_generated_age_seconds': int((forecast_received_at - generated_at).total_seconds()),
+            'forecast_update_age_seconds': int((forecast_received_at - updated_at).total_seconds()),
+            'forecast_freshness_max_age_seconds': int(MAX_FORECAST_AGE.total_seconds()),
             'hourly_count': expected, 'uncalibrated_grid_max_f': max(observed.values()),
             'interpretation': 'uncalibrated NWS grid forecast proxy, not a TWC/CLI settlement probability'}
 
 
 def observe(client: PublicMarketClient, twc: requests.Session, nws: requests.Session,
-            target: date, now: datetime) -> dict:
+            target: date, now: datetime, *, clock=None) -> dict:
     moment = cutoff(target)
     if not moment <= now <= moment + timedelta(seconds=120):
         raise ValueError('Outside immutable pre-event 120-second cutoff')
+    clock = clock or (lambda: datetime.now(timezone.utc))
     series = client.get_series(SERIES)
     require_source(series.get('settlement_sources'))
     listed = client.get_markets(SERIES, status='open', limit=200)
@@ -221,14 +253,14 @@ def observe(client: PublicMarketClient, twc: requests.Session, nws: requests.Ses
         raise MarketDataError('Incomplete event market listing')
     fee_type, fee_mult = effective_fees(series, event)
     station, previous_report = portal_station(twc, city, cli, target)
-    forecast = nws_forecast(nws, station, target, now)
-    if datetime.now(timezone.utc) > moment + timedelta(seconds=120):
+    forecast = nws_forecast(nws, station, target, now, receipt_fn=clock)
+    if clock() > moment + timedelta(seconds=120):
         raise MarketDataError('Source collection passed frozen cutoff before books')
     books = []
     for market in sorted(markets, key=lambda m: m['ticker']):
-        before = datetime.now(timezone.utc)
+        before = clock()
         book = client.get_orderbook(market['ticker'], depth=1)
-        after = datetime.now(timezone.utc)
+        after = clock()
         if before < moment or after > moment + timedelta(seconds=120):
             raise MarketDataError('Orderbook received outside frozen cutoff')
         q = quote_from_orderbook(book)
@@ -240,13 +272,17 @@ def observe(client: PublicMarketClient, twc: requests.Session, nws: requests.Ses
                       'indicative_no_taker_fee_ceiling': str(fee_estimate(q.no_ask, fee_type, fee_mult, maker=False))}
         books.append({'ticker': market['ticker'], 'before_utc': stamp(before),
                       'after_utc': stamp(after), 'orderbook_fp': book, 'quote': quotes})
-    return {'type': 'decision_observation', 'observed_at_utc': stamp(datetime.now(timezone.utc)),
+    first_book, last_book = common_book_window(books)
+    return {'type': 'decision_observation', 'observed_at_utc': stamp(clock()),
             'target_date': target.isoformat(), 'cutoff_utc': stamp(moment),
             'series': series, 'event': {k: v for k, v in event.items() if k != 'markets'},
             'event_ticker': event_id, 'markets': sorted(markets, key=lambda m: m['ticker']),
             'station_from_prior_final_TWC_report': station,
             'previous_report_date': previous_report['date'], 'previous_report_source': previous_report.get('source'),
             'forecast': forecast, 'books': books,
+            'books_started_utc': stamp(first_book), 'books_completed_utc': stamp(last_book),
+            'book_skew_seconds': (last_book - first_book).total_seconds(),
+            'max_book_skew_seconds': MAX_BOOK_SKEW.total_seconds(),
             'fee_type': fee_type, 'fee_multiplier': str(fee_mult),
             'paper_orders': 0, 'real_orders': 0, 'real_fills': 0,
             'probability_model': None, 'projected_profit': None}
@@ -441,7 +477,7 @@ def run(*, journal: Path, public: PublicMarketClient | None = None,
                                            r.get('type') == 'source_and_venue_label' and
                                            r.get('target_date') == key), None)
                     if (now.astimezone(LOCAL_TZ).date()>target and
-                            ((key not in labels and original_label is None and checks%180==0) or
+                            ((key not in labels and checks%180==0) or
                              (key in labels and checks%1440==0))):
                         try:
                             resolved=label(public, twc, decisions[key])

@@ -1,6 +1,7 @@
 """Synthetic pilot safety fixtures; NOT evidence of live profitability."""
 import tempfile
 import unittest
+import sys
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal as D
 from pathlib import Path
@@ -8,8 +9,9 @@ from unittest.mock import Mock, patch
 
 from core.execution_ledger import LedgerError, OrderLedger
 from core.order_math import plan
+from core.pilot_retirement import PilotRetiredError
 from core.pilot_venue import MLB_SHARD, ScopedVenue, VenueError
-from pilot_live import reconcile_one, safe_pilot_account, submit_one, choose_candidate, run
+from pilot_live import main, reconcile_one, safe_pilot_account, submit_one, choose_candidate, run
 
 
 class PilotVenueTests(unittest.TestCase):
@@ -24,44 +26,33 @@ class PilotVenueTests(unittest.TestCase):
         return plan('yes', 'buy', 1, D('0.4500')).payload(
             'KXMLBGAME-TEST-TEAM', 'pilot-test-1234', subaccount=1, exchange_index=MLB_SHARD)
 
-    def test_post_once_uses_tls_no_redirect_and_numbered_shard(self):
+    def test_completed_pilot_post_boundary_is_retired_before_network(self):
         response = Mock(status_code=201)
         response.json.return_value = {'order_id': 'order-test-1234', 'client_order_id': 'pilot-test-1234',
                                       'fill_count': '1.00', 'remaining_count': '0.00'}
         self.venue.client.session.post.return_value = response
-        result = self.venue.submit_ioc(self.payload())
-        self.assertEqual(result['fill_count'], '1.00')
-        self.venue.client.session.post.assert_called_once()
-        self.assertEqual(self.venue.client.session.post.call_args.kwargs['allow_redirects'], False)
-        self.assertEqual(self.venue.client.session.post.call_args.kwargs['verify'], True)
-        self.assertEqual(self.venue.client.session.post.call_args.kwargs['json']['subaccount'], 1)
-        self.assertEqual(self.venue.client.session.post.call_args.kwargs['json']['exchange_index'], 3)
+        with self.assertRaises(PilotRetiredError):
+            self.venue.submit_ioc(self.payload())
+        self.venue.client.session.post.assert_not_called()
 
-    def test_wrong_shard_high_price_or_post_timeout_never_retries(self):
+    def test_retired_post_boundary_rejects_every_payload_without_retries(self):
         for patch in ({'exchange_index': 0}, {'subaccount': 0}, {'price': '0.6000'},
                       {'count': '2.00'}, {'time_in_force': 'good_till_canceled'}):
-            with self.subTest(patch=patch), self.assertRaises(VenueError):
+            with self.subTest(patch=patch), self.assertRaises(PilotRetiredError):
                 self.venue.submit_ioc(dict(self.payload(), **patch))
         self.venue.client.session.post.assert_not_called()
         self.venue.client.session.post.side_effect = TimeoutError('network')
-        with self.assertRaisesRegex(VenueError, 'uncertain'):
+        with self.assertRaises(PilotRetiredError):
             self.venue.submit_ioc(self.payload())
-        self.venue.client.session.post.assert_called_once()
+        self.venue.client.session.post.assert_not_called()
 
-    def test_only_verified_own_resting_order_may_be_canceled(self):
+    def test_completed_pilot_cancellation_is_retired_before_network(self):
         row = {'order_id': 'order-test-1234', 'client_order_id': 'pilot-test-1234',
                'ticker': 'KXMLBGAME-TEST-TEAM', 'status': 'resting',
                'subaccount_number': 1, 'exchange_index': 3}
-        for bad in ({'subaccount_number': 0}, {'exchange_index': 0},
-                    {'client_order_id': 'other'}, {'status': 'executed'}):
-            with self.subTest(bad=bad), self.assertRaises(VenueError):
-                self.venue.cancel_owned_resting(dict(row, **bad), 'pilot-test-1234')
+        with self.assertRaises(PilotRetiredError):
+            self.venue.cancel_owned_resting(row, 'pilot-test-1234')
         self.venue.client.session.delete.assert_not_called()
-        response = Mock(status_code=200)
-        response.json.return_value = {'order_id': row['order_id'], 'client_order_id': row['client_order_id']}
-        self.venue.client.session.delete.return_value = response
-        self.venue.cancel_owned_resting(row, 'pilot-test-1234')
-        self.venue.client.session.delete.assert_called_once()
 
     def test_scoped_cash_positions_orders_and_fills(self):
         self.venue.get = Mock(return_value={'balance_dollars': '2.0000'})
@@ -78,6 +69,13 @@ class PilotVenueTests(unittest.TestCase):
                                           'subaccount_number': 1, 'exchange_index': 0}]
         with self.assertRaises(VenueError):
             self.venue.fills('KX-TEST', 'abc-1234')
+
+    def test_execute_flag_with_fresh_ledger_is_retired_before_config_or_post(self):
+        argv = ['pilot_live.py', '--execute', '--config', 'unused.json', '--subaccount', '1',
+                '--ledger', 'fresh.sqlite', '--deadline-utc', '2026-09-29T00:00:00Z']
+        with patch.object(sys, 'argv', argv), patch('pilot_live.secure_config') as config:
+            self.assertEqual(main(), 2)
+        config.assert_not_called()
 
 
 class PilotJournalTests(unittest.TestCase):

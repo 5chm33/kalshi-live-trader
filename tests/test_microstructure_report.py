@@ -1,7 +1,10 @@
 """Synthetic journal records are test fixtures, never trading-performance evidence."""
 import unittest
+import json
+import tempfile
 from datetime import datetime, timezone
-from microstructure_report import summarize
+from pathlib import Path
+from microstructure_report import load_validated_rows, summarize
 
 
 class MicrostructureReportTests(unittest.TestCase):
@@ -89,6 +92,27 @@ class MicrostructureReportTests(unittest.TestCase):
             summarize(iter([start, game, dict(paid, event_ticker='OUTSIDER')]))
         with self.assertRaisesRegex(ValueError, 'Duplicate settlement'):
             summarize(iter([start, game, paid, paid]))
+
+    def test_cli_loader_rejects_substituted_or_post_terminal_collector_state(self):
+        registration={'type':'study_start','start_at_utc':'2026-09-26T00:00:00Z',
+                      'until_utc':'2026-09-27T00:00:00Z','series_ticker':'KXMLBGAME',
+                      'max_events':120,'order_writes_enabled':False,'real_orders':0,'real_fills':0}
+        event={'type':'event_selected','event_ticker':'X','observed_at_utc':'2026-09-26T01:00:00Z',
+               'scheduled_start_utc':'2026-09-26T01:30:00Z','real_orders':0,'real_fills':0}
+        end={'type':'study_end','real_orders':0,'real_fills':0}
+        with tempfile.TemporaryDirectory() as folder:
+            p=Path(folder)/'journal.jsonl'
+            def rows(items):
+                p.write_text('\n'.join(json.dumps(x) for x in items)+'\n');p.chmod(0o600)
+            rows([dict(registration,series_ticker='OTHER'),end])
+            with self.assertRaisesRegex(ValueError,'registration'):
+                load_validated_rows(p)
+            rows([registration,end,event])
+            with self.assertRaisesRegex(ValueError,'after original study end'):
+                load_validated_rows(p)
+            rows([registration,event,end])
+            with self.assertRaisesRegex(ValueError,'window'):
+                load_validated_rows(p)
 
 
 if __name__ == '__main__':

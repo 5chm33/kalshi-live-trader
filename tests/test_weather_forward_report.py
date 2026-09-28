@@ -20,8 +20,11 @@ class WeatherReportTests(unittest.TestCase):
                'last_target':study.LAST_TARGET.isoformat(),'until_utc':study.stamp(study.DEADLINE),
                'cutoff_local':'18:00 America/New_York','paper_orders':0,'real_orders':0,'real_fills':0}
         decision={'type':'decision_observation','target_date':'2026-09-27',
-                  'forecast':{'uncalibrated_grid_max_f':70},
-                  'books':[{'quote':{'yes_ask_size_fp':'2'}},{'quote':None}],
+                  'forecast':{'uncalibrated_grid_max_f':70,'forecast_generated_age_seconds':60,
+                              'forecast_update_age_seconds':120},
+                  'books':[{'before_utc':'2026-09-26T22:00:00Z','after_utc':'2026-09-26T22:00:01Z','quote':{'yes_ask_size_fp':'2'}},
+                           {'before_utc':'2026-09-26T22:00:02Z','after_utc':'2026-09-26T22:00:03Z','quote':None}],
+                  'book_skew_seconds':3.0,'max_book_skew_seconds':5.0,
                   'paper_orders':0,'real_orders':0,'real_fills':0}
         return start,decision
 
@@ -38,18 +41,26 @@ class WeatherReportTests(unittest.TestCase):
             start,decision=self.sample()
             decision['markets']=[{'ticker':'KXHIGHNY-26SEP27-T65'},
                                  {'ticker':'KXHIGHNY-26SEP27-T72'}]
-            decision['books']=[{'ticker':'KXHIGHNY-26SEP27-T65','quote':{
+            decision['books']=[{'ticker':'KXHIGHNY-26SEP27-T65','before_utc':'2026-09-26T22:00:00Z','after_utc':'2026-09-26T22:00:01Z','quote':{
                 'yes_ask_size_fp':'105.04','yes_ask':'0.6200',
                 'no_ask_size_fp':'198.00','no_ask':'0.3900',
                 'indicative_yes_taker_fee_ceiling':'0.0200',
                 'indicative_no_taker_fee_ceiling':'0.0200'}},
-                               {'ticker':'KXHIGHNY-26SEP27-T72','quote':None}]
+                               {'ticker':'KXHIGHNY-26SEP27-T72','before_utc':'2026-09-26T22:00:02Z','after_utc':'2026-09-26T22:00:03Z','quote':None}]
             text=render(self.journal(d,[start,decision]))
         self.assertIn('0.6400 (105.04 shown)',text)
         self.assertIn('0.4100 (198.00 shown)',text)
         self.assertIn('one-sided/empty; ineligible',text)
         self.assertIn('Not a forecast probability or trade signal',text)
         self.assertIn('Fee-adjusted returns and win percentage: **undefined**',text)
+
+    def test_legacy_or_skewed_timing_is_visible_but_excluded_from_hurdles(self):
+        with tempfile.TemporaryDirectory() as d:
+            start,decision=self.sample()
+            decision.pop('book_skew_seconds')
+            text=render(self.journal(d,[start,decision]))
+        self.assertIn('freshness/skew proof unavailable',text)
+        self.assertIn('No full market/book rows yet',text)
 
     def test_verified_source_and_venue_counted_once(self):
         with tempfile.TemporaryDirectory() as d:

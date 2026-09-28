@@ -23,6 +23,7 @@ from core.fresh_book import fresh_confirmed_quote
 from core.microstructure import _grid_check, effective_fees, fee_estimate, scheduled_start
 from core.order_math import plan
 from core.pilot_venue import MLB_SHARD, ScopedVenue, VenueError, money
+from core.pilot_retirement import PilotRetiredError, require_pilot_write_retired
 from core.public_market import MarketDataError, PublicMarketClient, quote_from_orderbook
 
 MAX_DEPOSIT = Decimal('2.00')
@@ -379,6 +380,11 @@ def main() -> int:
     args = parser.parse_args()
     if not args.execute:
         print('LIVE PILOT DISABLED: --execute required', file=sys.stderr)
+        return 2
+    try:
+        require_pilot_write_retired()
+    except PilotRetiredError as exc:
+        print(f'LIVE PILOT RETIRED: {exc}', file=sys.stderr)
         return 2
     try:
         deadline = datetime.fromisoformat(args.deadline_utc.replace('Z', '+00:00'))

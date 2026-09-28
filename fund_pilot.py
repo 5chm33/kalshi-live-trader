@@ -21,6 +21,7 @@ from uuid import uuid4
 from account_preflight import secure_config
 from core.kalshi_client import KalshiClient
 from core.pilot_venue import MLB_SHARD, VenueError, money
+from core.pilot_retirement import PilotRetiredError, require_pilot_write_retired
 
 CAP = Decimal('2.00')
 TRANSFER_CENTICENTS = 20000  # Kalshi intra_exchange_instance_transfer 'amount' is 1/100 of one cent.
@@ -68,6 +69,7 @@ def balance(client: KalshiClient, sub: int, shard: int) -> Decimal:
 
 
 def once_post(client: KalshiClient, endpoint: str, body: dict) -> dict:
+    require_pilot_write_retired()
     headers = client._auth_headers('POST', endpoint)
     try:
         response = client.session.post(client.base_url + '/trade-api/v2' + endpoint,
@@ -187,6 +189,11 @@ def main() -> int:
     args = parser.parse_args()
     if not args.execute:
         print('FUNDING DISABLED: --execute required', file=sys.stderr)
+        return 2
+    try:
+        require_pilot_write_retired()
+    except PilotRetiredError as exc:
+        print(f'FUNDING RETIRED: {exc}', file=sys.stderr)
         return 2
     try:
         client = KalshiClient(secure_config(args.config))

@@ -39,6 +39,16 @@ class CollectorTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 collect(now.replace(tzinfo=None),Path(tmp)/'naive')
 
+    def test_past_or_too_near_deadline_fails_before_journal_or_observer(self):
+        now=datetime(2026,9,26,tzinfo=timezone.utc)
+        with TemporaryDirectory() as tmp, patch('collect_shadow.utcnow', return_value=now), \
+                patch('collect_shadow.run') as run:
+            for deadline in (now, now-timedelta(seconds=1), now+timedelta(seconds=60)):
+                with self.subTest(deadline=deadline), self.assertRaisesRegex(ValueError,'more than 60'):
+                    collect(deadline,Path(tmp)/str(deadline.timestamp()))
+            run.assert_not_called()
+            self.assertEqual(list(Path(tmp).glob('**/*.jsonl')),[])
+
     def test_uncompleted_segment_cannot_be_called_clean(self):
         now=datetime(2026,9,26,tzinfo=timezone.utc)
         clock=[now,now,now]

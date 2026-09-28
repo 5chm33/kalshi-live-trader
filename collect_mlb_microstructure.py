@@ -36,6 +36,8 @@ def open_private_journal(path: Path):
     path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     if path.parent.stat().st_mode & 0o077:
         raise PermissionError("Journal directory must be owner-only")
+    if path.exists():
+        recover_truncated_tail(path)
     fd = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     if os.fstat(fd).st_mode & 0o077:
         os.close(fd)
@@ -43,10 +45,48 @@ def open_private_journal(path: Path):
     return os.fdopen(fd, "a", buffering=1)
 
 
+def recover_truncated_tail(path: Path) -> None:
+    """Remove only an invalid unterminated tail before append-after-crash recovery."""
+    raw = path.read_bytes()
+    if not raw or raw.endswith(b"\n"):
+        return
+    prefix, separator, tail = raw.rpartition(b"\n")
+    try:
+        json.loads(tail)
+    except json.JSONDecodeError:
+        # The previous durable newline ends the valid journal. A lone partial
+        # first line is similarly not a valid study registration.
+        with path.open("r+b") as output:
+            output.truncate(len(prefix) + len(separator))
+            output.flush()
+            os.fsync(output.fileno())
+
+
+def journal_rows(path: Path) -> list[dict]:
+    """Read append-only JSONL, discarding only a crash-truncated final line."""
+    raw = path.read_text(encoding="utf-8")
+    lines = raw.splitlines(keepends=True)
+    rows = []
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            if index == len(lines) - 1 and not raw.endswith("\n"):
+                break
+            raise ValueError("Malformed or interior-corrupt journal JSON") from exc
+        if not isinstance(row, dict):
+            raise ValueError("Journal row must be an object")
+        rows.append(row)
+    return rows
+
+
 def emit(file, kind: str, **fields):
     file.write(json.dumps({"type": kind, "observed_at_utc": iso(now_utc()), **fields},
                           sort_keys=True, separators=(",", ":")) + "\n")
     file.flush()
+    os.fsync(file.fileno())
 
 
 def load_journal(path: Path):
@@ -59,11 +99,7 @@ def load_journal(path: Path):
         return starts, selected, settled, ended
     if path.is_symlink() or path.stat().st_mode & 0o077:
         raise PermissionError("Existing journal is insecure")
-    with path.open() as stream:
-      for line in stream:
-        if not line.strip():
-            continue
-        row = json.loads(line)
+    for row in journal_rows(path):
         records += 1
         if ended:
             raise ValueError("Rows appended after original study end")
@@ -109,7 +145,7 @@ def event_markets(event):
     return start, sorted(markets, key=lambda m: m["ticker"])
 
 
-def discover(client, file, discovered_at, selected, series):
+def discover(client, file, discovered_at, selected, series, *, deadline: datetime | None = None):
     """Choose only events seen at least an hour before their binding start."""
     rows = client.get_markets(series_ticker=SERIES, status="open", limit=200)
     event_ids = sorted({m.get("event_ticker") for m in rows if isinstance(m, dict)
@@ -123,6 +159,10 @@ def discover(client, file, discovered_at, selected, series):
             start, markets = event_markets(event)
             if start < discovered_at + timedelta(minutes=60):
                 continue  # never backfill a game without the prescribed hour
+            if deadline is not None and start > deadline:
+                emit(file, "event_excluded", event_ticker=ticker,
+                     reason="scheduled_start_after_immutable_study_deadline")
+                continue
             effective_fees(series, event)
             candidates.append((start, ticker, event, markets))
         except (MarketDataError, TypeError, ValueError) as exc:
@@ -215,8 +255,19 @@ def scan_settlements(client, file, selected, settled, now):
 
 def collect(*, until: datetime, journal: Path, interval: float = 10.0,
             discover_interval: float = 300.0, client=None, sleep=time.sleep):
-    if until.tzinfo is None or not 5 <= interval <= 60 or not 30 <= discover_interval <= 900:
+    if (until.tzinfo is None or until.utcoffset() != timedelta(0)
+            or not 5 <= interval <= 60 or not 30 <= discover_interval <= 900):
         raise ValueError("Invalid UTC deadline or intervals")
+    if journal.exists():
+        prior_starts, prior_selected, _prior_settled, prior_ended = load_journal(journal)
+        if prior_ended:
+            if len(prior_starts) != 1 or prior_starts[0].get('until_utc') != iso(until):
+                raise ValueError('Completed study deadline differs from immutable journal')
+            return {"events_selected": len(prior_selected), "cycles": 0,
+                    "real_orders": 0, "already_completed": True}
+    launch = now_utc()
+    if not launch < until <= launch + timedelta(days=7, minutes=2):
+        raise ValueError("Study deadline must be future and within seven days of launch")
     with open_private_journal(journal) as output:
         fcntl.flock(output.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         starts, selected, settled, ended = load_journal(journal)
@@ -247,7 +298,7 @@ def collect(*, until: datetime, journal: Path, interval: float = 10.0,
             try:
                 if series is None or t0 - last_discovery >= discover_interval:
                     series = client.get_series(SERIES)
-                    selected = discover(client, output, now, selected, series)
+                    selected = discover(client, output, now, selected, series, deadline=until)
                     last_discovery = t0
                 count = scan_selected(client, output, selected, series, now)
                 if t0 - last_settlement_check >= 900:

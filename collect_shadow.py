@@ -29,6 +29,8 @@ def collect(until: datetime, output_dir: Path, *, interval: float = 10.0,
     if until.tzinfo is None or not 5 <= interval <= 300 or not 60 <= segment_seconds <= 7200:
         raise ValueError('UTC deadline, interval, or segment duration invalid')
     now = utcnow()
+    if until <= now + timedelta(seconds=60):
+        raise ValueError('Research collector deadline must be more than 60 seconds in the future')
     if until - now > timedelta(days=7, minutes=2):
         raise ValueError('Research collector may not run more than seven days from launch')
     if output_dir.is_symlink():

@@ -3,11 +3,11 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from collect_mlb_microstructure import collect, discover, event_markets, load_journal, open_private_journal, scan_selected
+from collect_mlb_microstructure import collect, discover, emit, event_markets, load_journal, open_private_journal, scan_selected
 from core.public_market import MarketDataError
 from tests.test_microstructure import market, book, RULE
 
@@ -98,6 +98,32 @@ class MLBCollectorTests(unittest.TestCase):
         self.assertTrue(result['already_completed'])
         self.assertEqual(self.path.read_text(), original)
         self.client.get_series.assert_not_called()
+
+    def test_expired_new_study_rejects_before_journal_or_client_calls(self):
+        now=datetime(2026,9,26,7,tzinfo=timezone.utc)
+        with patch('collect_mlb_microstructure.now_utc',return_value=now):
+            with self.assertRaisesRegex(ValueError,'future'):
+                collect(until=now,journal=self.path,client=self.client,sleep=lambda _:None)
+        self.assertFalse(self.path.exists())
+        self.client.get_series.assert_not_called()
+
+    def test_emit_fsyncs_and_only_truncated_final_line_is_recovered(self):
+        registration={'type':'study_start','start_at_utc':'2026-09-26T07:00:00Z',
+                      'until_utc':'2026-09-27T07:00:00Z','series_ticker':'KXMLBGAME',
+                      'max_events':120,'order_writes_enabled':False}
+        with open_private_journal(self.path) as output, patch('collect_mlb_microstructure.os.fsync') as sync:
+            emit(output,'study_start',start_at_utc=registration['start_at_utc'],until_utc=registration['until_utc'],
+                 series_ticker='KXMLBGAME',max_events=120,order_writes_enabled=False)
+            self.assertTrue(sync.called)
+        with self.path.open('ab') as output:
+            output.write(b'{"type":"event_selected"')
+        with open_private_journal(self.path):
+            pass
+        self.assertEqual(load_journal(self.path)[0][0]['type'],'study_start')
+        self.path.write_text(json.dumps(registration)+'\n{not-json}\n')
+        self.path.chmod(0o600)
+        with self.assertRaisesRegex(ValueError,'interior-corrupt'):
+            load_journal(self.path)
 
 
 if __name__ == '__main__':

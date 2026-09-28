@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
+from collect_mlb_microstructure import MAX_EVENTS, SERIES, journal_rows, load_journal
+
 
 def moment(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -26,6 +28,37 @@ def valid_sample(sample, target):
            for t in (b, a)):
         return False
     return abs((after[0] - after[1]).total_seconds()) <= 2
+
+
+def load_validated_rows(path: Path) -> list[dict]:
+    """Validate immutable collector state before rendering a feasibility report."""
+    starts, selected, _settled, ended = load_journal(path)
+    if len(starts) != 1:
+        raise ValueError('Missing immutable collector registration')
+    if not ended:
+        raise ValueError('Incomplete collector journal has no terminal study_end')
+    rows = journal_rows(path)
+    registration = starts[0]
+    start = moment(registration['start_at_utc'])
+    deadline = moment(registration['until_utc'])
+    if (registration.get('series_ticker') != SERIES or registration.get('max_events') != MAX_EVENTS
+            or registration.get('order_writes_enabled') is not False
+            or start.tzinfo is None or deadline.tzinfo is None
+            or not start < deadline <= start + timedelta(days=7, minutes=2)):
+        raise ValueError('Invalid immutable collector registration')
+    if rows[-1].get('type') != 'study_end' or any(row.get('real_orders') not in (0, None)
+                                                   or row.get('real_fills') not in (0, None)
+                                                   for row in rows):
+        raise ValueError('Journal is not a terminal no-order collector study')
+    for row in rows:
+        if row.get('type') != 'event_selected':
+            continue
+        observed = moment(row['observed_at_utc'])
+        scheduled = moment(row['scheduled_start_utc'])
+        if (row.get('event_ticker') not in selected or observed < start or observed > deadline
+                or scheduled < observed + timedelta(minutes=60) or scheduled > deadline):
+            raise ValueError('Selected event violates immutable collector window')
+    return rows
 
 
 def summarize(rows, as_of=None):
@@ -142,11 +175,16 @@ def main():
     p.add_argument("journal", type=Path)
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
-    rows = (json.loads(line) for line in args.journal.open() if line.strip())
-    report = summarize(rows)
-    if args.output.is_symlink():
-        raise PermissionError("Report path cannot be symlink")
-    args.output.write_text(report)
+    report = summarize(load_validated_rows(args.journal))
+    if args.output.exists() or args.output.is_symlink():
+        raise FileExistsError("Report output must be a new regular path")
+    if args.output.parent.stat().st_mode & 0o077:
+        raise PermissionError("Report directory must be owner-only")
+    with args.output.open('x', encoding='utf-8') as output:
+        output.write(report)
+        output.flush()
+        import os
+        os.fsync(output.fileno())
     args.output.chmod(0o600)
     print(report)
 

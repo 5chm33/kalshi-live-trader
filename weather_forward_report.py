@@ -6,7 +6,24 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
-from weather_forward import load_journal
+from core.public_market import MarketDataError
+from weather_forward import MAX_BOOK_SKEW, MAX_FORECAST_AGE, common_book_window, load_journal
+
+
+def timing_supported(row: dict) -> bool:
+    """Only post-remediation records with explicit freshness/skew proof are comparable."""
+    try:
+        forecast = row['forecast']
+        if (int(forecast['forecast_generated_age_seconds']) < 0
+                or int(forecast['forecast_update_age_seconds']) < 0
+                or int(forecast['forecast_generated_age_seconds']) > int(MAX_FORECAST_AGE.total_seconds())
+                or int(forecast['forecast_update_age_seconds']) > int(MAX_FORECAST_AGE.total_seconds())):
+            return False
+        first, last = common_book_window(row['books'])
+        return (float(row['book_skew_seconds']) == (last - first).total_seconds()
+                and float(row['max_book_skew_seconds']) == MAX_BOOK_SKEW.total_seconds())
+    except (KeyError, TypeError, ValueError, MarketDataError):
+        return False
 
 
 def render(journal: Path) -> str:
@@ -33,7 +50,8 @@ def render(journal: Path) -> str:
             reason = row.get('reason',row['type']).replace('|','/').replace('\n',' ')
             lines.append(f'| {key} | {row["type"]} | — | — | No | {reason} |')
             continue
-        forecast=row['forecast']['uncalibrated_grid_max_f']
+        supported=timing_supported(row)
+        forecast=row['forecast']['uncalibrated_grid_max_f'] if supported else '—'
         final=final_rows.get(key)
         source_value='—'
         settled='No'
@@ -42,19 +60,20 @@ def render(journal: Path) -> str:
             settled='Yes'
         usable=sum(1 for b in row['books'] if b.get('quote') is not None and
                    Decimal(b['quote']['yes_ask_size_fp']) >= 1)
-        note=f'{usable}/{len(row["books"])} one-contract YES asks displayed; not fills'
+        note=(f'{usable}/{len(row["books"])} one-contract YES asks displayed; not fills'
+              if supported else 'pre-remediation freshness/skew proof unavailable; price hurdles unsupported')
         if key in revisions:
             note += '; source revision or disagreement UNRESOLVED'
         lines.append(f'| {key} | captured | {forecast} | {source_value} | {settled} | {note} |')
     if not decisions:
         lines.append('| — | Waiting for first registered cutoff | — | — | No | — |')
     lines += ['', '## Displayed one-contract break-even probability hurdles', '',
-              '**Not a forecast probability or trade signal.** Values are cutoff-time public asks plus the archived conservative one-unit taker-fee ceiling. A later fill may differ; model uncertainty requires a further predeclared margin.', '',
+              '**Not a forecast probability or trade signal.** Values are bounded common-window public asks plus the archived conservative one-unit taker-fee ceiling. Records without explicit freshness and cross-book timing proof are excluded. A later fill may differ; model uncertainty requires a further predeclared margin.', '',
               '| Climate date | Contract | YES ask + fee hurdle | NO ask + fee hurdle | Displayed one-unit depth |',
               '| --- | --- | ---: | ---: | --- |']
     have_complete_book=False
     for day, row in sorted(decisions.items()):
-        if row['type'] != 'decision_observation' or 'markets' not in row:
+        if row['type'] != 'decision_observation' or 'markets' not in row or not timing_supported(row):
             continue
         markets={m['ticker']:m for m in row['markets']}
         if len(markets) != len(row['books']) or {b['ticker'] for b in row['books']} != set(markets):

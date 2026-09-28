@@ -283,9 +283,11 @@ class OrderLedger:
         caller must first verify actual order status and all fills through GETs.
         """
         row = self._row(client_id)
-        if (row["phase"] != "reconcile" or not order_terminal
+        if (row["phase"] != "reconcile" or order_terminal is not True
                 or row['exchange_status'] not in {'executed', 'canceled'}
-                or exchange_position_size != 0):
+                or not isinstance(exchange_position_size, Decimal)
+                or not exchange_position_size.is_finite()
+                or exchange_position_size != Decimal(0)):
             raise LedgerError("Cannot release capital from an open or uncertain position")
         if row["exchange_fill_count"] is None or self.filled_quantity(client_id) != Decimal(row["exchange_fill_count"]):
             raise LedgerError("Unreconciled fills; cannot mark flat")

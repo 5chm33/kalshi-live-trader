@@ -1,0 +1,29 @@
+[Unit]
+Description=Finite Kalshi/TWC/NWS weather provenance study (public GET only; no orders)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/kalshi-live-trader
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/ubuntu/kalshi-live-trader/.venv/bin/python /home/ubuntu/kalshi-live-trader/weather_forward.py --output /home/ubuntu/kalshi-live-trader/logs/research/weather_nyc_2026-09-26.jsonl
+Restart=on-failure
+RestartSec=45
+RuntimeMaxSec=850000
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/kalshi-live-trader/logs/research
+InaccessiblePaths=/home/ubuntu/.config/kalshi
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

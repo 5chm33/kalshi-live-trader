@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 
 from core.kalshi_client import KalshiClient
+from core.pilot_retirement import require_pilot_write_retired
 
 TICKER = re.compile(r"^[A-Z0-9_-]{4,120}$")
 ORDER_ID = re.compile(r"^[A-Za-z0-9_-]{4,128}$")
@@ -145,7 +146,8 @@ class ScopedVenue:
         return [row for row in rows if row.get('order_id') == order_id]
 
     def submit_ioc(self, payload: dict) -> dict:
-        """Exactly one POST. A timeout, redirect, or malformed ACK is *uncertain*."""
+        """Historical pilot POST boundary, permanently retired before network access."""
+        require_pilot_write_retired()
         if (not isinstance(payload, dict) or payload.get('subaccount') != self.subaccount
                 or payload.get('exchange_index') != MLB_SHARD
                 or payload.get('time_in_force') != 'immediate_or_cancel'
@@ -184,6 +186,7 @@ class ScopedVenue:
         return result
 
     def cancel_owned_resting(self, order: dict, client_order_id: str) -> None:
+        require_pilot_write_retired()
         if (not isinstance(order, dict) or order.get('subaccount_number') != self.subaccount
                 or order.get('status') != 'resting' or order.get('exchange_index') != MLB_SHARD
                 or order.get('client_order_id') != client_order_id

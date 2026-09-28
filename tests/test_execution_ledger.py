@@ -124,6 +124,11 @@ class LedgerTests(unittest.TestCase):
     def test_verified_unfilled_ioc_may_close_and_release(self):
         self.submit(fill="0.00", remaining="0.00")
         self.terminal('one', 'KX-TEST', 'bid', 2, 0, 'canceled')
+        for malformed in (False, 0.0, '0'):
+            with self.subTest(malformed=malformed), self.assertRaises(LedgerError):
+                self.ledger.record_verified_flat("one", order_terminal=True,
+                                                exchange_position_size=malformed)
+        self.assertEqual(self.ledger.snapshot('one')['phase'], 'reconcile')
         self.ledger.record_verified_flat("one", order_terminal=True, exchange_position_size=D("0"))
         self.ledger.prepare("two", "KX-OTHER", self.item)
 
