@@ -20,6 +20,7 @@ def main() -> None:
     print(f"ecmwf_plus_aifs={len(forecast.ecmwf_members or [])}")
     print(f"gfs={len(forecast.gfs_members or [])}")
     print(f"icon={len(forecast.icon_members or [])}")
+    print(f"ukmo={len(forecast.ukmo_members or [])}")
     print(f"nws_point={forecast.nws_point_forecast}")
     print(f"probability={forecast.probability_above_threshold}")
     print(f"confidence={forecast.forecast_confidence}")

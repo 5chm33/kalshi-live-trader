@@ -1,82 +1,91 @@
-# Kalshi Live Trader v10
+# Kalshi Trader: Read-Only Validation Build
 
-Automated prediction-market research prototype for [Kalshi](https://kalshi.com). It combines a polling-based sports signal detector, an experimental weather ensemble, and a tennis value prototype.
+This repository is a **research prototype, not a proven profitable trading bot**. The previous live entry point had order-direction, reconciliation, stale-price, strategy-calibration, and position-exit defects. `python3 main.py` now runs a **bounded, public-data, read-only observer**. All authenticated writes in `core/kalshi_client.py` are blocked. `--live` exits with an error. No API credentials or backtest server are needed for observation.
 
-> **Important:** This repository is public for independent code review. It is **not validated as profitable**, is **not high-frequency trading**, and contains known blocking integration defects. Read [AUDIT_STATUS.md](AUDIT_STATUS.md) before running it. Do not use it unattended or with money you cannot afford to lose.
+**Separate, completed experimental execution path:** The user approved a maximum **$2 real-money execution-quality pilot**, despite the absence of demonstrated profit. The isolated `fund_pilot.py` and `pilot_live.py` are **not imported by `main.py`** and are never activated by a PR test or public-data collector. On 2026-09-26, one ≤$0.50 YES IOC entry and one reduce-only exit both filled in a new numbered MLB shard-3 subaccount; independent signed venue GETs verified the account flat and a **$0.0276 realized loss including fees**. The historical pilot's POST/DELETE and funding boundaries are now **permanently code-retired before network access**—a fresh ledger filename or `--execute` cannot reactivate it. **No profitable live trader is running.** See [the bounded experimental protocol](PILOT_LIVE.md). Do not use an unsegregated primary-account position or restart the finished pilot for another experiment.
 
-The project’s current behavior and limitations are documented in the audit; the architecture below describes intended components, not a guarantee that every component is currently wired into the execution loop.
+## Run the observer
 
-
-## Architecture
-
-```
-main.py (orchestrator)
-├── Fast Loop (10s) — Sports + Tennis
-│   ├── ESPN Live Score Feed → Score change detection
-│   ├── Market Matcher → Links ESPN games to Kalshi tickers
-│   ├── Latency Sniper → Buys stale prices after score changes
-│   └── Tennis Value → Rankings-based value + volatility plays
-│
-├── Slow Loop (180s) — Weather
-│   └── Experimental multi-model ensemble (live member count must be verified)
-│
-└── Position Manager — Trailing stops, profit targets, time exits
+```bash
+python3 -m pip install -r requirements.txt
+python3 -m unittest discover -s tests -v
+python3 main.py --cycles 6 --interval 10 --output logs/shadow_observations.jsonl
 ```
 
-## Strategies
+Output is append-only JSON Lines (ignored by Git). It records current ESPN MLB games, strict same-time Kalshi market matches, actual executable orderbook quotes and available depth, detected score changes, and **uncalibrated hypothetical** MLB heuristic candidates. When no live game has a matching market, it records a public quote from an unrelated market to verify both market discovery and book connectivity, but does not treat it as a trade. A `cycle_error` aborts on feed or market-data failure. Use `--cycles 1` for a one-shot check; allowed range is 1–180 scans and minimum interval is 10 seconds.
 
-### 1. Polling-Based Sports Signal Detector (MLB implemented)
-Polls ESPN score updates and evaluates a heuristic late-game baseball rule. The checked-in implementation is **MLB-only**, uses a 10-second REST polling loop, and does not implement a live WebSocket subscription or demonstrate exploitable latency after fees and fills.
+For a **30-minute wall-clock observation** that records source failures rather than stopping on the first outage, run `python3 observe_30m.py --duration-seconds 1800 --interval-seconds 10 --output logs/monitor_30m.jsonl`. It writes a private JSONL journal with `monitor_start`, per-cycle health/source errors, and `monitor_end`. If either feed fails, the resulting win rate is **undefined**; the watcher does not fake quotes, disable TLS verification, or submit an order. The normal observer and account client now use Kalshi's current documented `external-api.kalshi.com` host. A TLS hostname/expiry error at that host is an environmental connectivity failure to fix, not permission to use `verify=False`.
 
-- **Baseball Late Lead**: A heuristic for teams up 3+ runs in the sixth inning or later; its net profitability has not been validated.
-- **Score Change Handling**: IOC orders may be submitted after detected score changes; no latency advantage has been demonstrated.
+**A strict game match does not imply an executable market.** The observer distinguishes genuine API/book parse failures (`quote_error`) from an authentic but one-sided or empty book (`unusable_book`). It counts a `two_sided_game_pair` only when both team markets have fresh two-sided books; no signal is evaluated otherwise. A one-sided book must not be treated as an entry with a guaranteed exit. Repeated scans of one game are not independent trading opportunities. Data-error cycles are excluded from the hypothetical scorecard.
 
-### 2. Experimental Weather Ensemble (member count must be validated live)
-The engine requests five global weather-model families for temperature forecasting:
-- ECMWF IFS (51 members)
-- ECMWF AIFS (51 members)
-- GFS (31 members)
-- ICON (40 members)
-- UKMO (36 members)
+For **finite, restart-safe forward observation only** on a persistent computer, run `python3 collect_shadow.py --until-utc FUTURE_UTC_DEADLINE --output-dir logs/forward --interval-seconds 10` with a deadline **more than 60 seconds ahead** and no more than seven days away. It rejects stale/too-near deadlines before creating a journal, then creates owner-only, uniquely named 30-minute JSONL segments and `.md` summaries; an interrupted segment remains visibly incomplete rather than being merged into clean evidence. A filesystem lock prevents two collectors writing the same directory. This program imports **public market data only**, loads no Kalshi key, sends no order, and **never turns itself into a trading bot**. A running segment records failed/one-sided orderbooks separately: zero candidates when quotes were unavailable is not a clean no-opportunity result. Accept a run only when it has a positive-cycle segment plus `monitor_end`/summary with `real_orders == 0`; a deadline error is a nonzero stop condition. Tracked credentialless systemd definitions live under `deploy/systemd/`; review new results manually before changing any trading permission.
 
-Quality filters: 25% min edge for range markets, 55% confidence floor, 45c max NO price.
+After at least one segment completes, run `python3 forward_evidence.py logs/forward --output logs/forward_evidence.md`. This summarizes **only completed** real-data segments, marks current/incomplete segments separately, lists matched games versus both-sided book coverage, and refuses to label hypothetical prices as actual fills or profit. A genuine one-sided/empty book is logged as valid-but-**untradeable** `unusable_book`; failed reads and malformed books remain `quote_error`, and those segments cannot receive a hypothetical win rate. Repeated snapshots of the same game are not independent opportunities. The collector and report never activate trading.
 
-### 3. Experimental Tennis Value
-- Coarse rankings-based heuristic when the market underprices a favorite
-- An intended comeback heuristic; the current score feed does **not** provide the first-set state required to verify the claimed first-set-loss rule
+## Preregistered MLB microstructure audit (public GETs only)
 
-## Setup
+`collect_mlb_microstructure.py` is a **finite, seven-day-maximum, no-key, no-order** audit of the first 120 eligible future MLB full-game events. It archives both winner markets' explicit original scheduled starts from their rules, the current `KXMLBGAME` fee type/multiplier and event overrides, price grids, independently timestamped YES/NO depth-one books, and later Kalshi settlement values. Use `python3 collect_mlb_microstructure.py --until-utc FUTURE_UTC_DEADLINE --output logs/mlb_microstructure.jsonl` with a future deadline no more than seven days away. `python3 microstructure_report.py logs/mlb_microstructure.jsonl --output logs/mlb_microstructure_report.md` reports a single fixed decision observation per game, not one trial per 10-second poll. See [the frozen study design](MLB_MICROSTRUCTURE_STUDY.md) for exclusions and the 80/120 falsification gate. Passing the displayed-book screen cannot prove that two maker bids will fill; no live activation is automatic.
 
-1. Clone this repo
-2. Create `config.json`:
-```json
-{
-  "api_key": "your-kalshi-api-key",
-  "private_key_string": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
-}
+`python3 audit_weather_sources.py --check-open --output logs/weather_sources.json` inventories the public settlement-source labels of daily temperature series and checks whether any have current open contracts. **Do not assume that an NWS forecast determines a weather market's payout**: a live `KXHIGHNY` contract explicitly named The Weather Company instead. At the Sep 26 public check, 17 NWS-named daily-temperature series were listed but **zero had open markets**. The inventory neither estimates forecast accuracy nor makes a trade; availability must be checked again when used.
+
+### Source-linked daily-weather forward study (no key, no orders)
+
+The [frozen weather protocol](WEATHER_FORWARD_STUDY.md) studies the **currently open** `KXHIGHNY` daily series at precisely 18:00 New York time on each day before its target date, for seven dates beginning September 27, 2026. Kalshi's *specific series/event rules* currently name **The Weather Company**, whose [Kalshi-linked public daily climate report](https://weather.com/kalshi) identifies final NWS/NOAA CLI values and station IDs. `weather_forward.py` derives the `CLINYC` rule identifier from actual market text, verifies the same `NYC` CLI station in an **already final prior-day** TWC report, looks up that report's ICAO station in NWS to obtain coordinates and its hourly grid forecast, and archives exact source/fee/book responses. The NWS hourly maximum is explicitly an **uncalibrated proxy**, not the exact settlement, a probability, a proposed order, or a known edge; weather.com final reports and Kalshi venue settlement are checked later and separately.
+
+On a local Python 3.11 machine with `pip install -r requirements.txt`, or on the attached computer, run `python3 weather_forward.py --output logs/weather_nyc_forward.jsonl`; it creates a private append-only journal, resumes its original frozen cutoff without backfilling, stops after its fixed October 5 label tail, and never accesses the trading key or imports the writer. Each new predictor rejects NWS products whose `generatedAt` or `updateTime` is older than six hours at receipt, and rejects a multi-market book envelope wider than five seconds; old rows without that explicit proof remain visible but are excluded from hurdle reporting. A temporary TWC/venue disagreement remains append-only and is rechecked until the fixed label tail ends. To inspect the real accumulated records without inventing P&L: `python3 weather_forward_report.py logs/weather_nyc_forward.jsonl --output logs/weather_nyc_forward_report.md`. The repo's offline suite includes source alignment, DST-hour coverage, decision errors, final labels, freshness/skew gates, and no-order reporting. **Do not run an old instance to create a retroactive September 26 observation**; the first opportunity must be recorded in its original 120-second cutoff. This study cannot establish profitability in seven days and does not restart the completed, losing $2 pilot.
+
+### Archived model-run calibration (one-time non-commercial research)
+
+[`WEATHER_CALIBRATION_RESEARCH.md`](WEATHER_CALIBRATION_RESEARCH.md) defines a separate chronological 2026 NYC station-versus-archived-GFS research check. `weather_calibration.py --output logs/weather_calibration/results.json` uses only 12:00 UTC model runs initialized **the day before** the temperature date; `weather_calibration_report.py logs/weather_calibration/results.json --output logs/weather_calibration/scorecard.md` preserves actual data gaps, holdout event frequencies, and fee-inclusive live public-book hurdles. The archive has **115 usable dates and two genuine missing forecasts**; today's cooler grid forecast has only **one similar training date and four similar holdout dates**. An earlier 0.892 estimate borrowed unconditional summer errors, was **invalidated in independent review**, and is superseded by a corrected **unsupported/null probability and Brier**, not an edge or reason to spend money. Zero of all 24 subsequent holdout highs were below 65°F, but neither that fact nor the thin similar-date support proves a next-day outcome. The program now rejects any binding market rule not identifying **New York City (CLINYC)** before relying on the NYC TWC labels, and computes estimates only from comparable training forecasts. The original dated dataset and reanalyses are private Git-ignored files. The free archive API permits non-commercial use only; it is not wired into any for-profit execution service. The running forward collector and completed one-entry pilot remain separate.
+
+### First-three-innings three-outcome fee screen (public GETs only)
+
+The [complete-set pricing protocol](F3_PARTITION_STUDY.md) tests a different, model-free path: both **all-YES** (ordinary payout $1) and **all-NO** (ordinary payout $2) one-share baskets across exactly three rule-matched team-A/team-B/tie markets. `python3 scan_mlb_f3_partitions.py --output logs/research-mlb-f3/unique-run.jsonl --cycles 1` validates exact binding rules, sequential reciprocal asks and one-share depth, a **post-book rule/fee recheck**, conservative non-direct fee rounding, and a $0.03 per-basket slippage buffer. The owner-only versioned journal refuses overwrite. `python3 report_mlb_f3_partitions.py logs/research-mlb-f3/unique-run.jsonl --output logs/research-mlb-f3/unique-report.md` independently replays every book/rule/fee calculation and requires a complete terminal record. In the reviewer-corrected 11-event public sweep, 10 had valid scored-game rules/books, one lacked depth, and **both baskets were negative after modeled fees/buffer; no orders were placed**. The public response lacked explicit `is_provisional=false`, so all candidate promotions were suppressed even if arithmetic had been favorable. A future positive quote still has three **non-atomic** legs and does not automatically enable trading.
+
+## Optional private account diagnostics (GET-only)
+
+If you own a Kalshi key, store its key ID and PEM in a local **untracked** `config.json` with mode `0600`; never put credentials in a GitHub PR, issue, chat message, CI secret on a public fork, or read-only observation log. The following commands authenticate only to read balance, **primary-subaccount open positions**, resting orders, and recent fills; the performance check reads live and historical market positions. Do not infer other subaccounts are flat from this report:
+
+```bash
+chmod 600 config.json
+python3 account_preflight.py --config config.json --output logs/account_preflight.json
+python3 account_performance.py --config config.json --output logs/account_performance.json
+python3 account_limits.py --config config.json --output logs/account_limits.json
 ```
-3. Install dependencies: `pip install -r requirements.txt`
-4. Run: `python3 main.py`
 
-## API
+Both reports are local private files under the Git-ignored `logs/` directory. `balance_dollars` is available **cash**; the API's `portfolio_value` is separately reported as `position_mark_dollars` (not treated as total cash plus positions). Historical per-market realized P&L can include **unrelated manual trades** and is not an attribution to this bot or proof of future profitability. Account read errors abort, rather than implying zero positions or a zero balance. Uploaded older bundles may contain plaintext credentials; never extract or commit their `config.json` into this repository.
 
-Uses Kalshi V2 API with:
-- **IOC orders** (Immediate-Or-Cancel) supported by the order client; they do not establish that a stale-price fill is available.
-- **RSA-PSS signing** for authentication
-- Rate-limited to 20 req/sec (well under 30/sec advanced tier limit)
+For a read-only mark on an **already held** position, run `python3 position_watch.py --config config.json --output logs/position_watch.json`. It joins cursor-complete recent and archived fills, verifies their net quantity against the current signed position, and only displays an estimated liquidation P&L if a freshly queried two-sided book has enough bid depth. Complex prior round trips, missing archived fill directions, partial-contract fee ambiguity, and one-sided books yield `status: unavailable` rather than a fabricated value. The report is private, one-shot, and never submits an exit; generic future fees and top-of-book depth are *estimates*, not a sale guarantee.
+The watcher explicitly scopes the venue position and live fill GETs to **primary subaccount 0** and checks every archived fill's subaccount number before using its cost basis. Missing or other-subaccount fills cannot silently value a primary holding.
 
-## Intended Risk Controls (not independently verified)
+For the **unfilled observer**, `python3 shadow_performance.py logs/shadow_observations.jsonl --output logs/shadow_performance.json` estimates hypothetical 1-contract net P&L only when a later quote within 60–300 seconds provides enough exit depth. Missing exits remain unresolved; a successful hypothetical is **not** a trade, a realized win, or proof of achievable fills. A scan with no candidates produces an undefined rate, not 0% or 100%.
+It accepts YES-only records, requires one contract of entry depth, and refuses to double-count overlapping candidates for the same ticker. It cannot establish a profitable edge in an empty journal.
 
-- Max 8 concurrent positions
-- Max 50% of balance at risk
-- Max 20% per trade
-- Trailing stop: 20% from peak
-- Hard stop loss: -35%
-- Profit target: auto-sell at 90c
-- Time exit: 2 hours max hold for flat positions
+The GET-only recovery worker `python3 reconcile_journal.py --config config.json --ledger logs/order_ledger.sqlite --output logs/ledger_reconciliation.json` compares **bot-owned journal IDs only** to authenticated order statuses, live+archived fills, and venue positions. A missing order or read failure cannot clear uncertainty; partially filled positions remain open, and an existing unrelated position is never silently adopted. The SQLite journal and reports are private local files. The **default observer and recovery worker** do not create live order intents or send POST/DELETE; the separately isolated and already completed $2 pilot is the only narrowly approved writer in this build.
 
-## Requirements
+**A candidate is not a fill or win.** No P&L or win rate is computed. To measure performance, timestamp every candidate, use orderbook depth and achievable entry/exit prices, include actual fee schedule, reconcile hypothetical fills conservatively, wait for an exit/settlement, and report sample size and out-of-sample uncertainty. A handful of wins or an almost-100% win rate is not evidence of profitability; net return after fees and drawdown matter more.
 
-- Python 3.10+
-- Kalshi Advanced tier API access
-- `requests` and `cryptography` packages
+## Safety improvements in this build
+
+- Correct YES/NO quote math: orderbooks contain YES bids and NO bids; YES ask is `1 - best NO bid`, and NO ask is `1 - best YES bid`. An absent or one-sided book is **not** a zero-priced opportunity.
+- Exact MLB team code plus **original start time parsed from both market rules** (within 30 minutes of ESPN's scheduled time) rejects tomorrow's game or a same-team doubleheader. Kalshi's `occurrence_datetime` can be three hours later than first pitch and is not used as the MLB matching anchor.
+- Every candidate uses a newly fetched executable orderbook, not the 30-second market-discovery snapshot; bid/ask and depth are logged.
+- The standard taker-fee formula is used as an **estimate only**, subject to series-specific fees and real fill accounting. Quoted instant-exit P&L includes entry and exit estimated taker fees.
+- No substituted weather forecast date, fictitious normal-distribution fallback, or silently omitted UKMO member in the computed ensemble; missing target data means no probability.
+- Position GET failures are not treated as an empty portfolio; portfolio positions are paginated. **This does not mean live reconciliation is complete.**
+- Authenticated POST/DELETE writes remain blocked in the original `core/kalshi_client.py` and `main.py`; the separately documented, opt-in $2 pilot has its **own** narrowly scoped V2 gateway. The default observer only runs for its configured number of scans.
+- Execution primitives (`core/order_math.py`, `core/execution_ledger.py`, `core/position_valuation.py`) cover V2 YES/NO quote conversion, zero-bet-if-no-edge sizing for strategy research, exclusive crash-persistent order journaling, status GET recovery, partial-fill/exit ownership, and actual-fill accounting with a fresh-book exit estimate. The experimental one-contract pilot uses the ledger but is **not** a validated profitable strategy. The existing primary-account position is user-owned and must never be silently assigned to bot-owned inventory.
+- Local risk limits are separate from API usage tiers: the journal now caps new entry submission attempts at **three per UTC day** by default, while preserving the ability to submit a verified exit. Kalshi's [official rate-limit documentation](https://docs.kalshi.com/getting_started/rate_limits) specifies finite **Advanced** token buckets (300 read and 300 write tokens/second, with endpoint-specific costs), not unlimited trades or a guarantee of profitable fills. A later signed GET from the connected computer confirmed this account's effective Advanced tier with strict TLS; the sandbox's earlier TLS path failure was never bypassed.
+- Signed GETs now refuse cross-host redirects, which otherwise might forward signed headers. The limits command will report the **effective** tier and token refill only when Kalshi's certificate validates; it never grants permission to bypass the independent three-entry local safety cap.
+
+## Still blocked before claiming a profitable automated strategy
+
+1. A calibrated, out-of-sample forecast advantage at *achievable* prices, after actual series fees; the MLB probability lookup and tennis rank tables are currently heuristic, not validated.
+2. End-to-end order semantics: Kalshi V2 `bid` buys YES at a **YES price**, while `ask` sells YES at a **YES price**. Buying NO economically means selling YES at `1 - NO ask`, not using a NO price as the V2 ask price.
+3. Reconciliation of open orders, positions, fills, fees, partial fills, and account equity across restarts; no fallback values when an account endpoint fails.
+4. A tested exit path on both sides, with bounded slippage, real orderbook depth, status handling, and a capital cap enforced against the exchange portfolio. IOC orders can fail to fill; stops are *conditional order requests*, not guaranteed limits on loss.
+5. Strategy-specific weather market settlement rules (station, time zone, rounding and temperature boundary semantics), model calibration and ensemble dependence. Tennis comeback needs actual set-level state. No live trade should be generated from those modules yet.
+6. Credential provisioning through a private, read-only-first integration; never commit private keys. A private authenticated account diagnostic can verify current cash, positions and resting orders, but it does not grant live-trading readiness or demonstrate a strategy edge.
+7. **Exclusive inventory ownership**: this primary subaccount has user-owned activity. A net position of the right size does not prove the bot owns that lot, and REST reads of orders/fills/positions are not atomic with later manual activity. Do not connect a POST or automated reduce-only exit to this ledger on a shared primary subaccount. A dedicated, exclusive bot subaccount (or equally strong isolation) and continuous verification are required before such activation. Historical recovery intentionally remains blocked when archived records lack identity fields; it is not an excuse to retry an uncertain order.
+
+Review [AUDIT_STATUS.md](AUDIT_STATUS.md) for the dated findings and links to Kalshi's current API documentation. The old implementation remains available in repository history for independent review; don't restore it as a live entry point.

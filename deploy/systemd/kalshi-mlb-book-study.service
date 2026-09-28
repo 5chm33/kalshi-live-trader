@@ -1,0 +1,29 @@
+[Unit]
+Description=Finite Kalshi MLB orderbook feasibility study (public GET only; no orders)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/kalshi-live-trader
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/ubuntu/kalshi-live-trader/.venv/bin/python /home/ubuntu/kalshi-live-trader/collect_mlb_microstructure.py --until-utc 2026-10-03T07:00:00Z --output /home/ubuntu/kalshi-live-trader/logs/research/mlb_books_2026-09-26.jsonl --interval-seconds 10
+Restart=on-failure
+RestartSec=30
+RuntimeMaxSec=604800
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/kalshi-live-trader/logs/research
+InaccessiblePaths=/home/ubuntu/.config/kalshi
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

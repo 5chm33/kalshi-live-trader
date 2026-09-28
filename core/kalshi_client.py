@@ -1,9 +1,7 @@
-"""
-Kalshi API Client — v10
-========================
-Clean synchronous REST client + async WebSocket client.
-Supports both legacy V1 and new V2 order endpoints.
-Uses IOC (immediate-or-cancel) for sniping stale prices.
+"""Legacy Kalshi API client retained for inspection only.
+
+All writes are blocked in _request; the supported main.py uses public reads.
+The old order/position manager is not safe for live trading.
 """
 
 import os
@@ -14,6 +12,8 @@ import json
 import logging
 import threading
 import requests
+from decimal import Decimal, InvalidOperation
+from urllib.parse import quote
 from typing import Dict, List, Optional, Callable
 
 from cryptography.hazmat.primitives import serialization, hashes
@@ -22,8 +22,8 @@ from cryptography.hazmat.backends import default_backend
 
 log = logging.getLogger('KALSHI')
 
-BASE_URL = "https://api.elections.kalshi.com"
-WS_URL = "wss://api.elections.kalshi.com/trade-api/ws/v2"
+BASE_URL = "https://external-api.kalshi.com"
+WS_URL = "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
 
 
 class KalshiClient:
@@ -36,7 +36,7 @@ class KalshiClient:
         self.session.headers.update({'Content-Type': 'application/json'})
         self.private_key = None
         self._last_req = 0.0
-        self._min_interval = 0.05  # 20 req/sec (well under 30/sec limit)
+        self._min_interval = 0.05  # conservative client pacing; tier budgets are token-based
 
         # Load RSA key
         pem = None
@@ -60,7 +60,7 @@ class KalshiClient:
             log.error("[API] No private key found!")
 
     def _sign(self, ts: str, method: str, path: str) -> str:
-        full = path if path.startswith('/trade-api/v2') else f'/trade-api/v2{path}'
+        full = path if path.startswith(('/trade-api/v2', '/trade-api/ws/v2')) else f'/trade-api/v2{path}'
         msg = (ts + method + full.split('?')[0]).encode()
         sig = self.private_key.sign(
             msg,
@@ -82,6 +82,8 @@ class KalshiClient:
     def _request(self, method: str, path: str, body: dict = None,
                  retries: int = 3, timeout: int = 12) -> Optional[dict]:
         """Rate-limited HTTP request with retry."""
+        if method != 'GET':
+            raise RuntimeError('Live order writes disabled: unvalidated strategy and position reconciliation')
         wait = self._min_interval - (time.time() - self._last_req)
         if wait > 0:
             time.sleep(wait)
@@ -93,7 +95,8 @@ class KalshiClient:
             try:
                 hdrs = self._auth_headers(method, path)
                 if method == 'GET':
-                    r = self.session.get(url, headers=hdrs, timeout=timeout)
+                    r = self.session.get(url, headers=hdrs, timeout=timeout,
+                                         allow_redirects=False)
                 elif method == 'POST':
                     r = self.session.post(url, headers=hdrs,
                                           data=json.dumps(body or {}), timeout=timeout)
@@ -134,13 +137,35 @@ class KalshiClient:
         log.error("[API] Auth FAILED")
         return False
 
+    def get_api_limits(self) -> dict:
+        """Validate the effective token tier; never infer limits from user claims."""
+        data = self._request('GET', '/account/limits')
+        if not isinstance(data, dict):
+            raise RuntimeError('Cannot verify Kalshi API usage tier')
+        tier = data.get('usage_tier')
+        if tier not in {'basic', 'advanced', 'expert', 'premier', 'paragon', 'prime', 'prestige'}:
+            raise RuntimeError('Unknown Kalshi API usage tier')
+        buckets = {}
+        for kind in ('read', 'write'):
+            value = data.get(kind)
+            if not isinstance(value, dict):
+                raise RuntimeError(f'Cannot verify {kind} token bucket')
+            refill, capacity = value.get('refill_rate'), value.get('bucket_capacity')
+            if (isinstance(refill, bool) or isinstance(capacity, bool) or
+                    not isinstance(refill, (int, float)) or
+                    not isinstance(capacity, (int, float)) or
+                    not 0 < refill <= capacity < 1000000):
+                raise RuntimeError(f'Invalid {kind} token bucket')
+            buckets[kind] = {'refill_rate': refill, 'bucket_capacity': capacity}
+        return {'usage_tier': tier, 'read': buckets['read'], 'write': buckets['write']}
+
     # ── Balance ───────────────────────────────────────────────────────────
 
     def get_balance(self) -> float:
         """Get available cash balance in dollars."""
         r = self._request('GET', '/portfolio/balance')
         if not r:
-            return 0.0
+            raise RuntimeError('Cannot verify Kalshi cash balance')
         # Prefer balance_dollars (fixed-point string in dollars)
         if 'balance_dollars' in r:
             return float(r['balance_dollars'])
@@ -149,18 +174,37 @@ class KalshiClient:
             bal = r['balance']
             if isinstance(bal, (int, float)):
                 return bal / 100.0
-        return 0.0
+        raise RuntimeError('Kalshi cash balance field missing or malformed')
 
     def get_portfolio_value(self) -> float:
-        """Get total portfolio value (cash + positions) in dollars."""
+        """Get API portfolio_value (position valuation, excluding available cash)."""
         r = self._request('GET', '/portfolio/balance')
         if not r:
-            return 0.0
+            raise RuntimeError('Cannot verify Kalshi portfolio value')
         if 'portfolio_value' in r:
             pv = r['portfolio_value']
             if isinstance(pv, (int, float)):
                 return pv / 100.0
-        return self.get_balance()
+        raise RuntimeError('Kalshi portfolio value field missing or malformed')
+
+    def get_account_snapshot(self) -> dict:
+        """Get cash and position mark from the same authenticated response.
+
+        This is a read-only diagnostic, not evidence that trading is safe.
+        Never replace absent or erroneous account fields with zero.
+        """
+        data = self._request('GET', '/portfolio/balance')
+        if data is None:
+            raise RuntimeError('Cannot verify Kalshi account balance')
+        try:
+            cash = Decimal(str(data['balance_dollars']))
+            value = Decimal(str(data['portfolio_value'])) / 100
+        except (KeyError, InvalidOperation, TypeError, ValueError) as exc:
+            raise RuntimeError('Kalshi account balance fields invalid') from exc
+        if not cash.is_finite() or not value.is_finite() or cash < 0 or value < 0:
+            raise RuntimeError('Kalshi account balance values invalid')
+        return {'cash_dollars': str(cash), 'position_mark_dollars': str(value),
+                'updated_ts': data.get('updated_ts')}
 
     # ── Markets ───────────────────────────────────────────────────────────
 
@@ -206,7 +250,7 @@ class KalshiClient:
 
         Args:
             ticker: Market ticker
-            side: 'bid' (buy YES) or 'ask' (buy NO / sell YES)
+            side: 'bid' (buy YES) or 'ask' (sell YES at a YES price)
             count: Number of contracts (float, e.g. 1.0)
             price: Price in dollars (float, e.g. 0.56)
             time_in_force: 'good_till_canceled', 'immediate_or_cancel', 'fill_or_kill'
@@ -282,18 +326,130 @@ class KalshiClient:
     # ── Positions ─────────────────────────────────────────────────────────
 
     def get_positions(self) -> List[dict]:
-        r = self._request('GET', '/portfolio/positions?count_filter=position')
-        if r and 'market_positions' in r:
-            return r['market_positions']
-        return []
+        r = self._request('GET', '/portfolio/positions?count_filter=position&subaccount=0')
+        if r is None or not isinstance(r.get('market_positions'), list):
+            raise RuntimeError('Cannot verify live portfolio positions; not an empty portfolio')
+        positions = list(r['market_positions'])
+        cursor = r.get('cursor')
+        seen = set()
+        while cursor:
+            if cursor in seen or len(seen) >= 100:
+                raise RuntimeError('Positions pagination incomplete')
+            seen.add(cursor)
+            r = self._request('GET', f'/portfolio/positions?count_filter=position&subaccount=0&cursor={quote(str(cursor), safe="")}')
+            if r is None or not isinstance(r.get('market_positions'), list):
+                raise RuntimeError('Positions pagination failed')
+            positions.extend(r['market_positions'])
+            cursor = r.get('cursor')
+        return positions
+
+    def get_resting_orders(self) -> List[dict]:
+        """Read every currently resting order or fail rather than undercount exposure."""
+        orders = []
+        cursor = None
+        seen = set()
+        for _ in range(100):
+            path = '/portfolio/orders?status=resting&limit=200'
+            if cursor:
+                path += '&cursor=' + quote(str(cursor), safe='')
+            data = self._request('GET', path)
+            if data is None or not isinstance(data.get('orders'), list):
+                raise RuntimeError('Cannot verify resting orders')
+            orders.extend(data['orders'])
+            cursor = data.get('cursor')
+            if not cursor:
+                return orders
+            if cursor in seen:
+                raise RuntimeError('Resting order pagination cursor loop')
+            seen.add(cursor)
+        raise RuntimeError('Resting order pagination incomplete')
+
+    def get_orders_by_status(self, ticker: str, status: str) -> List[dict]:
+        """Enumerate matching live-tier orders; no absent=flat assumption."""
+        if status not in {'resting', 'executed', 'canceled'}:
+            raise ValueError('Invalid order status')
+        if not ticker or not all(x.isalnum() or x in '-_' for x in ticker):
+            raise ValueError('Invalid market ticker')
+        orders = []
+        seen = set()
+        cursor = None
+        for _ in range(100):
+            path = (f'/portfolio/orders?status={status}&ticker='
+                    + quote(ticker, safe='') + '&subaccount=0&limit=200')
+            if cursor:
+                path += '&cursor=' + quote(str(cursor), safe='')
+            data = self._request('GET', path)
+            if data is None or not isinstance(data.get('orders'), list):
+                raise RuntimeError('Order status GET incomplete')
+            orders.extend(data['orders'])
+            cursor = data.get('cursor')
+            if not cursor:
+                return orders
+            if cursor in seen:
+                raise RuntimeError('Order status cursor loop')
+            seen.add(cursor)
+        raise RuntimeError('Order status pagination incomplete')
+
+    def get_historical_market_orders(self, ticker: str) -> List[dict]:
+        """Read every archived order for a market, with a strict page bound."""
+        if not ticker or not all(x.isalnum() or x in '-_' for x in ticker):
+            raise ValueError('Invalid market ticker')
+        orders = []
+        seen = set()
+        cursor = None
+        for _ in range(100):
+            path = '/historical/orders?ticker=' + quote(ticker, safe='') + '&subaccount=0&limit=200'
+            if cursor:
+                path += '&cursor=' + quote(str(cursor), safe='')
+            data = self._request('GET', path)
+            if data is None or not isinstance(data.get('orders'), list):
+                raise RuntimeError('Historical order GET incomplete')
+            orders.extend(data['orders'])
+            cursor = data.get('cursor')
+            if not cursor:
+                return orders
+            if cursor in seen:
+                raise RuntimeError('Historical order cursor loop')
+            seen.add(cursor)
+        raise RuntimeError('Historical order pagination incomplete')
 
     # ── Fills ─────────────────────────────────────────────────────────────
 
     def get_fills(self, limit: int = 50) -> List[dict]:
         r = self._request('GET', f'/portfolio/fills?limit={limit}')
-        if r and 'fills' in r:
-            return r['fills']
-        return []
+        if r is None or not isinstance(r.get('fills'), list):
+            raise RuntimeError('Cannot verify fills')
+        return r['fills']
+
+    def get_market_fills(self, ticker: str, *, historical: bool = False) -> List[dict]:
+        """Cursor-complete live or archived fills for one market; no partial result.
+
+        Historical fills lack book_side in their documented shape. Obtain
+        direction from the corresponding authenticated order, never guess.
+        """
+        if not ticker or not all(x.isalnum() or x in '-_' for x in ticker):
+            raise ValueError('Invalid market ticker')
+        cursor = None
+        seen = set()
+        fills = []
+        for _ in range(100):
+            endpoint = '/historical/fills' if historical else '/portfolio/fills'
+            path = endpoint + '?ticker=' + quote(ticker, safe='') + '&limit=200'
+            if not historical:
+                path += '&subaccount=0'
+            if cursor:
+                path += '&cursor=' + quote(str(cursor), safe='')
+            data = self._request('GET', path)
+            if data is None or not isinstance(data.get('fills'), list):
+                raise RuntimeError('Cannot verify complete market fills')
+            fills.extend(data['fills'])
+            cursor = data.get('cursor')
+            if not cursor:
+                return fills
+            if cursor in seen:
+                raise RuntimeError('Market fills pagination cursor loop')
+            seen.add(cursor)
+        raise RuntimeError('Market fills pagination incomplete')
 
     # ── WebSocket auth headers ────────────────────────────────────────────
 
