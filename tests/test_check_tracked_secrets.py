@@ -21,7 +21,8 @@ class SecretScanTests(unittest.TestCase):
     def test_large_tracked_private_key_literal_is_not_skipped(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self.repository(root, {'blob.bin': b'x' * 3_100_000 + b'-----BEGIN RSA PRIVATE KEY-----'})
+            synthetic_signature = b'-----BEGIN ' + b'RSA PRIVATE KEY-----'
+            self.repository(root, {'blob.bin': b'x' * 3_100_000 + synthetic_signature})
             findings = scan(root)
         self.assertEqual(findings, ['private key/token literal in tracked file: blob.bin'])
 
